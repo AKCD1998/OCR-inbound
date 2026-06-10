@@ -14,7 +14,420 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
-from ocr_environment import environment_config, load_dotenv, resolve_environment_name, validate_environment_path
+from ocr_environment import environment_config, load_dotenv, resolve_environment_name, validate_environment_path, workspace_root
+
+
+SELECTED_PAGES_RUN_SLUG = "1-6_3_1_selected_pages_946766cc69"
+SELECTED_PAGES_JSON_PATH = workspace_root() / "ocr_selected_pages.json"
+
+
+def _find_selected_pages_run_dir() -> Optional[Path]:
+    staging_root = workspace_root() / "ocr_runs_staging"
+    candidate = staging_root / SELECTED_PAGES_RUN_SLUG
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
+SOURCE_PAGE_LABELS = ["13", "14", "15", "16", "19", "23", "29", "30", "31", "48", "49", "52", "71"]
+
+
+def _stages_data_for_page(run_dir: Path, page_number: int) -> Dict[str, Any]:
+    """Return all engine outputs for one page as a dict."""
+    result: Dict[str, Any] = {}
+
+    # Native
+    native_path = run_dir / "ocr" / "native" / f"page-{page_number:04d}.txt"
+    native_text = native_path.read_text(encoding="utf-8", errors="replace").strip() if native_path.exists() else ""
+    result["native"] = {"text": native_text, "confidence": None, "available": native_path.exists()}
+
+    # Tesseract – pick best TSV by avg confidence
+    tess_dir = run_dir / "ocr" / "tesseract"
+    best_path: Optional[Path] = None
+    best_score: Optional[float] = None
+    variants: List[Dict[str, Any]] = []
+    for tsv_path in sorted(tess_dir.glob(f"page-{page_number:04d}_*.tsv")):
+        confs: List[float] = []
+        try:
+            with tsv_path.open(encoding="utf-8", errors="replace", newline="") as fh:
+                for row in csv.DictReader(fh, delimiter="\t"):
+                    txt = (row.get("text") or "").strip()
+                    cr = row.get("conf", "")
+                    if not txt or not cr or cr == "-1":
+                        continue
+                    try:
+                        confs.append(float(cr))
+                    except ValueError:
+                        pass
+        except Exception:
+            continue
+        score = sum(confs) / len(confs) if confs else 0.0
+        variants.append({"name": tsv_path.stem, "confidence": round(score / 100, 4), "word_count": len(confs)})
+        if best_score is None or score > best_score:
+            best_path = tsv_path
+            best_score = score
+    tess_text = ""
+    tess_conf = None
+    if best_path:
+        txt_path = best_path.with_suffix(".stdout.txt")
+        tess_text = txt_path.read_text(encoding="utf-8", errors="replace").strip() if txt_path.exists() else ""
+        tess_conf = round(best_score / 100, 4) if best_score is not None else None
+    result["tesseract"] = {"text": tess_text, "confidence": tess_conf, "variants": variants, "available": best_path is not None}
+
+    # EasyOCR
+    easy_json = run_dir / "ocr" / "easyocr" / f"page-{page_number:04d}.json"
+    if easy_json.exists():
+        rows = json.loads(easy_json.read_text(encoding="utf-8"))
+        confs = [float(r.get("confidence", 0)) for r in rows if r.get("confidence") is not None]
+        lines = [r.get("text", "") for r in rows if r.get("text")]
+        result["easyocr"] = {
+            "text": "\n".join(lines),
+            "confidence": round(sum(confs) / len(confs), 4) if confs else None,
+            "word_count": len(rows),
+            "available": True,
+        }
+    else:
+        result["easyocr"] = {"text": "", "confidence": None, "word_count": 0, "available": False}
+
+    # PaddleOCR – pick best language pass
+    paddle_dir = run_dir / "ocr" / "paddle"
+    best_paddle: Dict[str, Any] = {"text": "", "confidence": None, "lang": None, "word_count": 0, "available": False}
+    for lang in ("th", "en"):
+        pj = paddle_dir / f"page-{page_number:04d}_{lang}.json"
+        if not pj.exists():
+            continue
+        rows = json.loads(pj.read_text(encoding="utf-8"))
+        confs = [float(r.get("confidence", 0)) for r in rows if r.get("confidence") is not None]
+        lines = [r.get("text", "") for r in rows if r.get("text")]
+        conf = round(sum(confs) / len(confs), 4) if confs else None
+        if conf is not None and (best_paddle["confidence"] is None or conf > best_paddle["confidence"]):
+            best_paddle = {"text": "\n".join(lines), "confidence": conf, "lang": lang, "word_count": len(rows), "available": True}
+    result["paddleocr"] = best_paddle
+
+    # Fusion
+    fused_path = run_dir / "fusion" / "fused_regions.json"
+    if fused_path.exists():
+        all_regions = json.loads(fused_path.read_text(encoding="utf-8"))
+        page_regions = [r for r in all_regions if r.get("page") == page_number]
+        page_regions.sort(key=lambda r: (r.get("bbox", [0, 0, 0, 0])[1], r.get("bbox", [0, 0, 0, 0])[0]))
+        lines_f: List[str] = []
+        confs_f: List[float] = []
+        for reg in page_regions:
+            t = reg.get("normalized_candidate_text") or ""
+            if t:
+                lines_f.append(t)
+            for cand in reg.get("raw_candidates", {}).values():
+                c = cand.get("confidence")
+                if c is not None:
+                    try:
+                        cf = float(c)
+                        if cf > 1.0:
+                            cf /= 100.0
+                        confs_f.append(cf)
+                    except (TypeError, ValueError):
+                        pass
+        result["fusion"] = {
+            "text": "\n".join(lines_f),
+            "confidence": round(sum(confs_f) / len(confs_f), 4) if confs_f else None,
+            "region_count": len(page_regions),
+            "available": True,
+        }
+    else:
+        result["fusion"] = {"text": "", "confidence": None, "region_count": 0, "available": False}
+
+    return result
+
+
+STAGES_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCR Pipeline Stages</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e0e0e0;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#hdr{background:#1a1d2e;padding:10px 20px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #2a2d3e;flex-shrink:0}
+#hdr h1{font-size:1rem;font-weight:600;color:#c0c8ff}
+#hdr a{color:#6b7aaa;font-size:.85rem;text-decoration:none}
+#hdr a:hover{color:#a0b0ff}
+#refresh-status{font-size:.75rem;color:#5a6080;margin-left:auto}
+#layout{display:flex;flex:1;overflow:hidden}
+#sidebar{width:176px;flex-shrink:0;background:#13151f;border-right:1px solid #2a2d3e;overflow-y:auto;padding:6px 0}
+.pg{padding:8px 10px;cursor:pointer;border-left:3px solid transparent;transition:.15s}
+.pg:hover{background:#1e2235}
+.pg.active{background:#1e2235;border-left-color:#5b7ffa}
+.pg-label{font-size:.85rem;font-weight:500;color:#c0c8e8}
+.pg-sub{font-size:.7rem;color:#5a6080;margin-top:1px}
+.dots{display:flex;gap:4px;margin-top:4px}
+.dot{width:8px;height:8px;border-radius:50%;background:#2a2d3e;flex-shrink:0}
+.dot.ok{background:#4caf50}
+.dot.run{background:#ff9800;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#main{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+#sum-bar{background:#1a1d2e;border-radius:8px;padding:10px 14px;display:flex;gap:18px;flex-wrap:wrap}
+.si{font-size:.78rem}.sl{color:#5a6080}.sv{color:#c0c8e8;font-weight:600}
+#img-sec{background:#1a1d2e;border-radius:8px;padding:10px 14px}
+#img-sec h2{font-size:.78rem;color:#5a6080;margin-bottom:8px}
+#page-img{max-width:100%;max-height:360px;object-fit:contain;display:block;margin:0 auto;border-radius:4px;background:#0a0c14}
+#eng-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.ec{background:#1a1d2e;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;min-height:300px}
+.ec.tess{border-top:3px solid #5b7ffa}
+.ec.paddle{border-top:3px solid #ff7043}
+.ec.easy{border-top:3px solid #4caf50}
+.ec.fusion{border-top:3px solid #ab47bc}
+.eh{padding:9px 12px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0}
+.en{font-size:.85rem;font-weight:600}
+.em{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.badge{font-size:.7rem;padding:2px 6px;border-radius:10px;font-weight:600}
+.bg{background:#1a4a1a;color:#6fce6f}
+.by{background:#4a3a0a;color:#e0b050}
+.br{background:#4a1a1a;color:#e06060}
+.bx{background:#2a2d3e;color:#6b7aaa}
+.eb{padding:0 12px 12px;flex:1;display:flex;flex-direction:column;gap:5px}
+.es{font-size:.72rem;color:#5a6080}
+.es.ok{color:#4caf50}
+.et{flex:1;font-family:'Courier New',monospace;font-size:.73rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;background:#0f1117;border:1px solid #2a2d3e;border-radius:4px;padding:8px;overflow-y:auto;max-height:220px;color:#c8d0e8}
+.et.empty{color:#3a3d50;font-style:italic}
+.emeta{font-size:.69rem;color:#5a6080}
+#loading{display:flex;align-items:center;justify-content:center;flex:1;color:#5a6080;font-size:.9rem}
+</style>
+</head>
+<body>
+<div id="hdr">
+  <h1>OCR Pipeline Stages</h1>
+  <a href="/">&#8592; Back</a>
+  <span id="refresh-status"></span>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main"><div id="loading">Loading&#8230;</div></div>
+</div>
+<script>
+const SRC = ["13","14","15","16","19","23","29","30","31","48","49","52","71"];
+const N = 13;
+let cur = 1, pgStatus = {}, timer = null;
+const ENG = [
+  {key:"tesseract", label:"Tesseract",  cls:"tess",   color:"#5b7ffa"},
+  {key:"paddleocr", label:"PaddleOCR",  cls:"paddle", color:"#ff7043"},
+  {key:"easyocr",   label:"EasyOCR",    cls:"easy",   color:"#4caf50"},
+  {key:"fusion",    label:"Fusion",     cls:"fusion", color:"#ab47bc"},
+];
+
+function badge(c){
+  if(c===null||c===undefined) return '<span class="badge bx">N/A</span>';
+  const p=Math.round(c*100);
+  return `<span class="badge ${p>=80?'bg':p>=50?'by':'br'}">${p}%</span>`;
+}
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function dot(s){return `<span class="dot ${s||''}"></span>`;}
+
+function buildSidebar(){
+  const sb=document.getElementById("sidebar");
+  sb.innerHTML="";
+  for(let i=1;i<=N;i++){
+    const st=pgStatus[i]||{};
+    const div=document.createElement("div");
+    div.className="pg"+(i===cur?" active":"");
+    div.dataset.page=i;
+    div.innerHTML=`<div class="pg-label">Page ${i}</div><div class="pg-sub">Source: ${SRC[i-1]}</div><div class="dots">${dot(st.t)}${dot(st.p)}${dot(st.e)}${dot(st.f)}</div>`;
+    div.onclick=()=>selectPage(i);
+    sb.appendChild(div);
+  }
+}
+
+function metaSpan(eng, d){
+  if(eng.key==="tesseract"&&d.variants) return `<span class="emeta">${d.variants.length} variants</span>`;
+  if(eng.key==="paddleocr"&&d.lang) return `<span class="emeta">lang: ${d.lang}</span>`;
+  if(eng.key==="fusion"&&d.region_count!==undefined) return `<span class="emeta">${d.region_count} regions</span>`;
+  if(eng.key==="easyocr"&&d.word_count) return `<span class="emeta">${d.word_count} detections</span>`;
+  return "";
+}
+
+function engCard(eng, d){
+  const av=d.available, txt=d.text||"";
+  const words=(txt.match(/\S+/g)||[]).length;
+  const stat=!av?"Pending — not yet processed":(txt?`${words} words extracted`:"No text extracted");
+  const statcls=!av?"":txt?"ok":"";
+  return `<div class="ec ${eng.cls}">
+  <div class="eh"><span class="en" style="color:${eng.color}">${eng.label}</span>
+  <div class="em">${badge(d.confidence)}${metaSpan(eng,d)}</div></div>
+  <div class="eb">
+    <div class="es ${statcls}">${stat}</div>
+    <div class="et ${!txt?'empty':''}">${txt?esc(txt):(av?"(nothing extracted)":"waiting…")}</div>
+  </div></div>`;
+}
+
+function render(pn, data){
+  pgStatus[pn]={
+    t:data.tesseract?.available?"ok":"",
+    p:data.paddleocr?.available?"ok":"",
+    e:data.easyocr?.available?"ok":"run",
+    f:data.fusion?.available?"ok":"run",
+  };
+  if(data.easyocr?.available) pgStatus[pn].e="ok";
+  if(data.fusion?.available) pgStatus[pn].f="ok";
+
+  const confItems=ENG.map(e=>{
+    const c=(data[e.key]||{}).confidence;
+    return `<div class="si"><span class="sl">${e.label}: </span><span class="sv">${c!==null&&c!==undefined?Math.round(c*100)+"%":"N/A"}</span></div>`;
+  }).join("");
+
+  document.getElementById("main").innerHTML=`
+  <div id="sum-bar">
+    <div class="si"><span class="sl">Page </span><span class="sv">${pn}/${N}</span></div>
+    <div class="si"><span class="sl">Source doc pg </span><span class="sv">${SRC[pn-1]}</span></div>
+    ${confItems}
+  </div>
+  <div id="img-sec">
+    <h2>Page Image</h2>
+    <img id="page-img" src="/api/selected-page-image?page=${pn}" alt="page ${pn}" onerror="this.style.display='none'">
+  </div>
+  <div id="eng-grid">${ENG.map(e=>engCard(e,data[e.key]||{})).join("")}</div>`;
+
+  buildSidebar();
+}
+
+async function selectPage(pn){
+  cur=pn;
+  document.getElementById("main").innerHTML='<div id="loading">Loading page data…</div>';
+  buildSidebar();
+  clearTimeout(timer);
+  try{
+    const r=await fetch(`/api/stages-data?page=${pn}`);
+    const data=await r.json();
+    render(pn, data);
+    const needsRefresh=!data.easyocr?.available||!data.fusion?.available;
+    const rs=document.getElementById("refresh-status");
+    if(needsRefresh){
+      rs.textContent="Auto-refreshing every 15s (engines still processing)…";
+      timer=setTimeout(()=>selectPage(cur),15000);
+    } else {
+      rs.textContent="All engines complete ✓";
+    }
+  }catch(e){
+    document.getElementById("main").innerHTML=`<div id="loading" style="color:#e06060">Error: ${e.message}</div>`;
+  }
+}
+
+for(let i=1;i<=N;i++) pgStatus[i]={};
+buildSidebar();
+selectPage(1);
+</script>
+</body>
+</html>"""
+
+
+SELECTED_PAGES_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCR Selected Pages Viewer</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f5f5f5; margin: 0; padding: 16px; }
+  h1 { font-size: 1.4rem; margin-bottom: 8px; }
+  .summary { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; }
+  .summary h2 { font-size: 1rem; margin: 0 0 8px; }
+  .summary table { border-collapse: collapse; width: 100%; }
+  .summary td { padding: 3px 8px; font-size: 0.875rem; }
+  .summary td:first-child { color: #555; width: 200px; }
+  .poor-list { color: #c0392b; margin: 4px 0 0 0; padding-left: 20px; font-size: 0.85rem; }
+  .page-block { background: #fff; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 20px; overflow: hidden; }
+  .page-header { background: #2c3e50; color: #fff; padding: 8px 14px; display: flex; align-items: center; gap: 12px; }
+  .page-header h2 { margin: 0; font-size: 1rem; flex: 1; }
+  .page-header .badge { font-size: 0.75rem; background: rgba(255,255,255,0.2); border-radius: 10px; padding: 2px 8px; }
+  .conf-badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; }
+  .conf-high { background: #27ae60; color: #fff; }
+  .conf-med { background: #f39c12; color: #fff; }
+  .conf-low { background: #e74c3c; color: #fff; }
+  .conf-none { background: #95a5a6; color: #fff; }
+  .page-body { display: flex; gap: 0; }
+  .page-image-col { width: 340px; min-width: 340px; border-right: 1px solid #eee; padding: 12px; }
+  .page-image-col img { width: 100%; height: auto; border: 1px solid #ccc; border-radius: 3px; display: block; }
+  .page-image-col .no-image { background: #f0f0f0; height: 200px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 0.85rem; border-radius: 3px; }
+  .page-text-col { flex: 1; padding: 12px; overflow: hidden; }
+  .engine-label { font-size: 0.75rem; color: #777; margin-bottom: 4px; }
+  .ocr-text { white-space: pre-wrap; font-size: 0.8rem; font-family: 'Courier New', monospace; background: #fafafa; border: 1px solid #e0e0e0; border-radius: 3px; padding: 10px; max-height: 500px; overflow-y: auto; line-height: 1.5; }
+  .status-ok { color: #27ae60; }
+  .status-fail { color: #e74c3c; }
+  .loading { text-align: center; padding: 40px; color: #666; }
+  .error { color: #c0392b; background: #fdf0f0; border: 1px solid #f5c6cb; border-radius: 4px; padding: 12px; margin: 16px 0; }
+  @media (max-width: 700px) { .page-body { flex-direction: column; } .page-image-col { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid #eee; } }
+</style>
+</head>
+<body>
+<h1>OCR Selected Pages Viewer</h1>
+<div id="root"><div class="loading">Loading OCR results...</div></div>
+<script>
+async function load() {
+  const root = document.getElementById('root');
+  let data;
+  try {
+    const res = await fetch('/api/selected-pages-data');
+    if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + await res.text());
+    data = await res.json();
+  } catch(e) {
+    root.innerHTML = '<div class="error">Failed to load OCR results: ' + e.message + '</div>';
+    return;
+  }
+  const summary = data._summary || {};
+  const pages = Object.keys(data).filter(k => k.startsWith('page_')).sort((a,b)=>{
+    return parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]);
+  });
+
+  let html = '<div class="summary"><h2>Summary</h2><table>';
+  html += '<tr><td>Pages processed</td><td>' + (summary.pages_processed || pages.length) + '</td></tr>';
+  html += '<tr><td>OCR engines used</td><td>' + (summary.engines_used || []).join(', ') + '</td></tr>';
+  html += '<tr><td>Average confidence</td><td>' + (summary.average_confidence != null ? (summary.average_confidence * 100).toFixed(1) + '%' : 'N/A') + '</td></tr>';
+  const poor = summary.poor_quality_pages || [];
+  html += '<tr><td>Poor quality pages</td><td>';
+  if (poor.length === 0) { html += '<span class="status-ok">None</span>'; }
+  else { html += '<ul class="poor-list">' + poor.map(p=>'<li>'+p+'</li>').join('') + '</ul>'; }
+  html += '</td></tr></table></div>';
+
+  for (const key of pages) {
+    const entry = data[key];
+    const label = entry.source_page_label || key;
+    const conf = entry.confidence;
+    const engine = entry.primary_engine || '';
+    const text = entry.text || '';
+    const status = entry.status || '';
+
+    let confClass = 'conf-none', confLabel = 'N/A';
+    if (conf != null) {
+      confLabel = (conf * 100).toFixed(1) + '%';
+      if (conf >= 0.80) confClass = 'conf-high';
+      else if (conf >= 0.50) confClass = 'conf-med';
+      else confClass = 'conf-low';
+    }
+    const pageNum = parseInt(key.split('_')[1]);
+
+    html += '<div class="page-block">';
+    html += '<div class="page-header">';
+    html += '<h2>Page ' + label + '</h2>';
+    html += '<span class="badge">' + key + '</span>';
+    html += '<span class="badge">Engine: ' + engine + '</span>';
+    html += '<span class="conf-badge ' + confClass + '">Conf: ' + confLabel + '</span>';
+    html += '<span class="badge ' + (status === 'ok' ? 'status-ok' : 'status-fail') + '">' + status + '</span>';
+    html += '</div>';
+    html += '<div class="page-body">';
+    html += '<div class="page-image-col">';
+    html += '<img src="/api/selected-page-image?page=' + pageNum + '" alt="Page ' + label + '" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
+    html += '<div class="no-image" style="display:none">Image not available</div>';
+    html += '</div>';
+    html += '<div class="page-text-col">';
+    html += '<div class="engine-label">OCR Text (' + engine + ')</div>';
+    html += '<div class="ocr-text">' + (text ? text.replace(/</g,'&lt;').replace(/>/g,'&gt;') : '<em style="color:#aaa">No text extracted</em>') + '</div>';
+    html += '</div></div></div>';
+  }
+
+  root.innerHTML = html;
+}
+load();
+</script>
+</body>
+</html>"""
 
 
 def now_iso() -> str:
@@ -235,6 +648,55 @@ def make_handler(app: ReviewApp):
                 return
             if parsed.path == "/api/review-decisions":
                 self._send_json(app.decision_store())
+                return
+            if parsed.path == "/ocr-stages":
+                data = STAGES_HTML.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if parsed.path == "/api/stages-data":
+                params = parse_qs(parsed.query)
+                try:
+                    page_number = int(params.get("page", ["1"])[0])
+                except ValueError:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Invalid page")
+                    return
+                run_dir = _find_selected_pages_run_dir()
+                if run_dir is None:
+                    self._send_json({"error": "Run directory not found"}, status=404)
+                    return
+                self._send_json(_stages_data_for_page(run_dir, page_number))
+                return
+            if parsed.path == "/ocr-selected-pages":
+                data = SELECTED_PAGES_HTML.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            if parsed.path == "/api/selected-pages-data":
+                if not SELECTED_PAGES_JSON_PATH.exists():
+                    self._send_json({"error": "ocr_selected_pages.json not found. Run build_selected_pages_json.py first."}, status=404)
+                    return
+                payload = json.loads(SELECTED_PAGES_JSON_PATH.read_text(encoding="utf-8"))
+                self._send_json(payload)
+                return
+            if parsed.path == "/api/selected-page-image":
+                params = parse_qs(parsed.query)
+                try:
+                    page_number = int(params.get("page", ["0"])[0])
+                except ValueError:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "Invalid page")
+                    return
+                run_dir = _find_selected_pages_run_dir()
+                if run_dir is None:
+                    self.send_error(HTTPStatus.NOT_FOUND, "Selected pages run directory not found")
+                    return
+                self._send_file(run_dir / "pages" / f"page-{page_number:04d}.png")
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
