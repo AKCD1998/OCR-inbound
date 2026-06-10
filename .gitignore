@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Secrets
+.env
+
+# OCR run outputs (large, generated)
+ocr_runs/
+ocr_runs_final/
+ocr_runs_oss_clean/
+ocr_runs_retry/
+ocr_runs_staging/
+
+# Generated viewer data
+ocr_viewer_data.json
+
+# Logs
+*.log
+*.err.log
+
+# Input PDFs (sensitive documents)
+*.pdf
+
+# OS
+.DS_Store
+Thumbs.db

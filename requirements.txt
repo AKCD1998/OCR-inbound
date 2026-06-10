@@ -1,0 +1,16 @@
+PyMuPDF>=1.24.0
+Pillow>=10.0.0
+numpy==1.26.4
+opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
+opencv-contrib-python==4.10.0.84
+pytesseract>=0.3.10
+paddleocr>=2.7.0
+paddlepaddle==3.2.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+torchvision==0.17.2+cpu
+easyocr>=1.7.0
+pdfplumber>=0.11.0
+camelot-py[cv]>=0.11.0
+openai>=1.50.0

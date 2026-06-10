@@ -1,0 +1,301 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f4f6f8;
+  color: #1a1f24;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #d9dee5;
+  background: #fff;
+}
+
+.topbar h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.topbar p {
+  margin: 0;
+  color: #58606b;
+}
+
+.environment-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.env-production {
+  background: #e8f4ec;
+  color: #157f3b;
+}
+
+.env-staging {
+  background: #fff4e5;
+  color: #9a6700;
+}
+
+.env-unknown {
+  background: #eef2f6;
+  color: #58606b;
+}
+
+.counts {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.count-pill {
+  background: #eef2f6;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 320px;
+  gap: 16px;
+  padding: 16px;
+  min-height: calc(100vh - 88px);
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #d9dee5;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.sidebar,
+.detail-panel,
+.viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #47515c;
+}
+
+select,
+input,
+textarea,
+button {
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid #c8d0d9;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+button {
+  background: #1f6feb;
+  color: #fff;
+  cursor: pointer;
+  border: none;
+}
+
+button:hover {
+  background: #1859bb;
+}
+
+.range-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subheading {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #58606b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.checkbox input {
+  width: auto;
+  margin: 0;
+}
+
+.zone-visibility {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.zone-visibility .checkbox {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
+.image-wrap {
+  position: relative;
+  width: 100%;
+  overflow: auto;
+  background: #fafbfc;
+}
+
+#page-image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.region-card,
+.conflict-card,
+.row-card {
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: #fafbfc;
+  cursor: pointer;
+}
+
+.region-card.active,
+.conflict-card.active,
+.row-card.active {
+  border-color: #1f6feb;
+  background: #eef5ff;
+}
+
+.region-card.member-of-row {
+  box-shadow: inset 0 0 0 2px rgba(31, 111, 235, 0.2);
+}
+
+.classification-tag {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #fff;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.detail-grid pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f7f8fa;
+  border: 1px solid #e1e6eb;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.candidate-row {
+  margin-bottom: 10px;
+}
+
+.candidate-row strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.save-status {
+  margin-top: 8px;
+  min-height: 18px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.legend {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.viewer-note {
+  margin-top: 6px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.row-list {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+@media (max-width: 1400px) {
+  .layout {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .detail-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 960px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCR Fusion Review</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="title-row">
+        <h1>OCR Fusion Review</h1>
+        <span id="environment-badge" class="environment-badge"></span>
+      </div>
+      <p id="run-meta"></p>
+    </div>
+    <div class="counts" id="run-counts"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>Filters</h2>
+        <label>Page
+          <select id="page-filter"></select>
+        </label>
+        <label>Classification
+          <select id="classification-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>Category
+          <select id="category-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>Zone
+          <select id="zone-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>Suggested Zone
+          <select id="suggested-zone-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>Engine Present
+          <select id="engine-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <div class="range-row">
+          <label>Min confidence
+            <input id="confidence-min" type="number" min="0" max="1" step="0.05" value="0">
+          </label>
+          <label>Max confidence
+            <input id="confidence-max" type="number" min="0" max="1" step="0.05" value="1">
+          </label>
+        </div>
+        <label class="checkbox">
+          <input id="conflicts-only" type="checkbox">
+          Conflicts only
+        </label>
+        <label class="checkbox">
+          <input id="show-rows" type="checkbox" checked>
+          Show row boxes
+        </label>
+        <div>
+          <div class="subheading">Visible Zones</div>
+          <div id="zone-visibility" class="zone-visibility"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Conflict Review</h2>
+        <div id="conflict-list" class="conflict-list"></div>
+      </section>
+      <section class="panel">
+        <h2>Candidate Rows</h2>
+        <div id="row-list" class="row-list"></div>
+      </section>
+    </aside>
+
+    <section class="viewer">
+      <div class="viewer-toolbar panel">
+        <div id="viewer-summary"></div>
+      </div>
+      <div class="image-stage panel">
+        <div class="image-wrap" id="image-wrap">
+          <img id="page-image" alt="OCR review page">
+          <svg id="overlay" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+      <div class="region-list panel">
+        <h2>Filtered Regions</h2>
+        <div id="region-list"></div>
+      </div>
+    </section>
+
+    <aside class="detail-panel">
+      <section class="panel">
+        <h2>Row Detail</h2>
+        <div id="row-detail" class="detail-grid"></div>
+      </section>
+      <section class="panel">
+        <h2>Region Detail</h2>
+        <div id="region-detail" class="detail-grid"></div>
+      </section>
+      <section class="panel">
+        <h2>Manual Decision</h2>
+        <form id="decision-form">
+          <label>Selected engine
+            <select id="selected-engine"></select>
+          </label>
+          <label>Selected candidate text
+            <textarea id="selected-text" rows="4"></textarea>
+          </label>
+          <label>Review status
+            <select id="review-status">
+              <option value="">Choose</option>
+              <option value="correct">correct</option>
+              <option value="wrong">wrong</option>
+              <option value="unreadable">unreadable</option>
+              <option value="needs_table_context">needs table context</option>
+            </select>
+          </label>
+          <label>Notes
+            <textarea id="review-notes" rows="4"></textarea>
+          </label>
+          <button type="submit" id="save-button">Save decision</button>
+          <div id="save-status" class="save-status"></div>
+        </form>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
