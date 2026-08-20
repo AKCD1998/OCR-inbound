@@ -631,3 +631,136 @@ $env:PYTHONPATH = "src"
 ```
 
 **หยุดที่นี่ตามคำสั่ง — รอ Codex ตรวจอิสระ ไม่ seal ไม่ commit จนกว่า Codex verdict = APPROVED TO SEAL**
+
+---
+
+## 22. Sonnet Layer F Slice 2 — bilingual Thai/English/mixed name matching (2026-08-20)
+
+**สถานะ: CANDIDATE — awaiting Codex adjudication. Scope: Slice 2 ONLY** (Slice 3 not started).
+รายงานฉบับเต็มอยู่ที่
+`ocr_runs_staging/realinv_20260820T040631Z/CANDIDATE_REPORT_SLICE2_BILINGUAL_NAME_MATCHING.md`
+
+**Base:** sealed Slice 1 commit `6737db9efccdc21f54b0d77b5d5ebfea2cd608ac` (parent `f3bea3fb`) --
+ผู้ใช้ commit เองระหว่างรอ Codex adjudication รอบสุดท้ายของ Slice 1 (§21) คำสั่ง Slice 2 ระบุตัวแปร
+`<FILL_SLICE_1_SHA>` ที่ไม่ได้ถูกกรอก -- ตรวจสอบ `git log`/diff แล้วยืนยัน HEAD ตรงกับเนื้อหา v5 ที่
+รายงานไปเป๊ะ (`RULESET_VERSION="layer-f-v5"`, `unit_final` ใน `input_hash`) จึงใช้เป็น base พร้อม
+รายงานความคลาดเคลื่อนของตัวแปรที่ไม่ได้กรอกไว้อย่างโปร่งใส
+
+| ID | สิ่งที่ทำ | Evidence | Claude verdict | Codex verdict |
+|---|---|---|---|---|
+| S-901 | Bilingual cache schema: `products` เพิ่ม `name_thai`/`name_eng`/`normalized_name_thai`/`normalized_name_eng` (ไม่ลบคอลัมน์เดิม, backward-compatible ผ่าน auto-language-detect split สำหรับ fixture รูปแบบเก่า) | `src/ocr_inbound/ada_read.py::_split_bilingual_name` + `refresh_from_fixture` | SELF_REPRODUCED | |
+| S-902 | Bilingual EXACT_NAME (`find_by_normalized_name` OR-match ทั้งสองภาษา, ไม่ COALESCE) | acceptance test 1/2/8 | SELF_REPRODUCED | |
+| S-903 | Bilingual TRADE_NAME_MATCH (haystack thai+eng+ingredient; token extraction แยกกติกาตามภาษา; Thai stopwords ใหม่) | acceptance test 1/2/3/8 | SELF_REPRODUCED | |
+| S-904 | Thai dosage-form contradiction guard (ขนานกับ English) | acceptance test 6 | SELF_REPRODUCED | |
+| S-905 | SPELLING_ALIAS tier ใหม่ (migration 0002 local app.db, supplier-agnostic, lifecycle เดียวกับ ACTIVE_ALIAS, auto-confirm) | test `test_spelling_alias_auto_confirms_and_outranks_did_you_mean`, `test_11_slice1_active_alias_still_outranks_spelling_alias` | SELF_REPRODUCED | |
+| S-906 | SPELLING_SUGGESTION tier ใหม่ ("คุณหมายถึง...หรือไม่", edit-distance-1 token correction, ไม่เคย auto-confirm) | acceptance test 4 | SELF_REPRODUCED | |
+| S-907 | **พบระหว่าง benchmark, นอกแผนเดิม**: whole-catalog fuzzy fallback ไม่เคยผ่าน attribute-contradiction guard เลยตั้งแต่ Slice 1 -- เสนอ wound dressing 3x3 นิ้ว ให้บรรทัดที่ระบุ 10x20cm ชัดเจน แก้แล้วด้วย guard เดียวกับ trade-name retrieval | `test_whole_catalog_fuzzy_fallback_never_proposes_a_pack_dimension_contradiction`, Phase E rerun ก่อน/หลังแก้ | SELF_REPRODUCED | |
+| S-908 | Phase E rerun กับ catalog จริง ~6,665 รายการ (ไม่ COALESCE ดึง `product_name_thai`/`product_name_eng` แยกกัน): เดิม 6 CORRECT/1 WRONG/2 UNRESOLVED → ใหม่ 7 CORRECT/1 WRONG(ปลอดภัยขึ้น)/0 UNRESOLVED -- บรรทัด 3 (cross-script gap ที่ค้างมาทุกรอบ) แก้ได้จริง | `SLICE2_BILINGUAL_PHASE_E_RESULTS.json` | SELF_REPRODUCED | |
+| S-909 | Benchmark: mean 1,093.9ms / median 558.7ms / p95 2,519.7ms / max 2,810.2ms (189 samples, 9 บรรทัดจริง×21 รอบ, local cache 6,665 รายการ, ไม่มี DB round trip ระหว่างวัด) | เดียวกับ S-908 | SELF_REPRODUCED | |
+| S-910 | Full suite + focused + safety scan | `tests/test_matching.py` 83/83; integration 4/4 (ไม่แตะ); behavioral 6/6; focused 93/93; full discovery **130/130**; safety scan ผ่านครบ | SELF_REPRODUCED | |
+| S-911 | Targeted revert-check สองระดับ: (a) เทียบ sealed Slice 1 SHA ตรง ๆ -- 7/13 test แรก fail จริงด้วย assertion/error (ไม่ tautology); (b) เทียบเฉพาะ fuzzy-guard fix -- 1/1 fail จริง | ดูรายงานฉบับเต็มหัวข้อ 8 | SELF_REPRODUCED | |
+| S-912 | ไม่มี production write, ไม่มี ADA/AdaAcc contact, ไม่มี commit/push/PR/merge/deploy, migration ใหม่เป็น local app.db เท่านั้น, ไม่แตะ Product Master, ไม่เริ่ม Slice 3 | `git status --porcelain` | SELF_REPRODUCED | |
+
+**คำถามเปิดสำหรับ Codex (รายละเอียดในรายงาน หัวข้อ 10):** (1) SPELLING_ALIAS ควร auto-confirm หรือไม่
+เพราะ scope กว้างกว่า ACTIVE_ALIAS เดิม (ทั้งร้าน vs รายsupplier); (2) trade-name tie ควรปิดจบทันทีหรือ
+ให้ SPELLING_ALIAS/SUGGESTION ลองต่อ; (3) จุดอื่นที่ควรมี attribute guard เพิ่มหรือไม่; (4) benchmark
+p95 ~2.5 วินาทีรับได้หรือควร block
+
+**Repro commands:**
+
+```powershell
+cd "C:\Users\scgro\Desktop\Webapp training project\OCR-inbound"
+$env:PYTHONPATH = "src"
+
+# S-901..S-907: bilingual + spelling-alias/suggestion focused tests
+& ".\.venv\Scripts\python.exe" -m unittest tests.test_matching.BilingualNameMatchingTests -v
+
+# S-910: full counts
+& ".\.venv\Scripts\python.exe" -W error::ResourceWarning -m unittest discover -s tests -t .  # expect 130
+
+# S-908, S-909: Phase E rerun + benchmark against the live read-only DB (bilingual, no COALESCE)
+& ".\.venv\Scripts\python.exe" ".\ocr_runs_staging\realinv_20260820T040631Z\rerun_layer_f_sonnet_slice2_bilingual.py"
+
+# S-911: revert-check -- see CANDIDATE_REPORT_SLICE2_BILINGUAL_NAME_MATCHING.md section 8 for exact
+# steps (two levels: full sealed-Slice-1 comparison, and fuzzy-guard-fix-only comparison)
+
+# S-912: safety scan
+& ".\.venv\Scripts\python.exe" ".\scripts\safety_scan.py"
+```
+
+**หยุดที่นี่ตามคำสั่ง — รอ Codex ตรวจอิสระ ไม่ seal ไม่ commit จนกว่า Codex verdict = APPROVED TO SEAL
+ไม่เริ่ม Slice 3**
+
+---
+
+## 23. Codex independent adjudication of Layer F Slice 2 candidate (2026-08-20)
+
+**Verdict: BLOCKED — bilingual direction and suggestion-only tiers are promising, but the new global auto-confirm alias path is not yet safe.**
+
+Codex independently verified the base SHA `6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`, reran full discovery 130/130 and the selected focused set 34/34, ran `safety_scan.py` successfully, and confirmed `git diff --check` is clean. The report's broad test/safety claims are therefore credible. The p95 ~2.5s worst-case latency is accepted for staging/human review in this slice, but must be optimized before high-volume activation.
+
+Release-blocking findings reproduced directly against the candidate:
+
+1. **Ruleset version was not bumped.** Slice 2 materially changes cache fields, exact-name behavior, tokenization, new tiers, fuzzy guards, and outcomes, but `ProductMatcher.RULESET_VERSION` remains `layer-f-v5`, the sealed Slice-1 version. Immutable predictions cannot distinguish Slice-1 and Slice-2 logic by ruleset. A new version is required.
+2. **Global spelling alias uses unsafe substring matching.** The code tests `alias["normalized_text"] in text_scan`; an ACTIVE alias `PARA → IC-A` auto-confirmed unrelated OCR `XPARAX UNKNOWN` as `IC-A`. Human approval does not authorize arbitrary character-substring matches. Use an exact normalized phrase / whole-token-sequence contract, with explicit behavior for Thai text, and regression-test embedded-substring false positives.
+3. **Auto-confirming spelling alias bypasses attribute contradictions.** An ACTIVE alias `MINIDIAB → MINIDIAB 5 MG TABLET` auto-confirmed OCR `MINIDIAB 10 MG TABLET`, despite a stated 5-vs-10mg conflict. Strength, pack, and dosage-form contradictions must prevent auto-confirm. Surface the conflict for human review; no weaker tier may silently erase it.
+4. **Human-approved global alias is ordered after heuristic trade-name matching.** With an approved alias `TYPOALIAS → IC-HUMAN`, OCR `MINIDIAB 10 MG TABLET TYPOALIAS` selected `IC-HEUR` through `TRADE_NAME_MATCH` before the approved mapping could run. A valid human-approved mapping must outrank unapproved `INTERNAL_CODE_TEXT_MATCH`, `TRADE_NAME_MATCH`, spelling suggestions, and fuzzy suggestions, while remaining below explicit code/barcode, supplier-scoped ACTIVE_ALIAS, and deterministic EXACT_NAME.
+5. **The new migration and lifecycle are not integration-tested.** Current tests use `_StaticAliasRepository`; no test calls `record_name_alias_observation`, `approve_name_alias`, or verifies migration 0001→0002. Add real SQLite tests for fresh bootstrap, upgrading an existing v1 database, three distinct-document observations → ELIGIBLE → human approval → ACTIVE, and conflicting products for the same normalized alias → QUARANTINED. Test duplicate observations from the same document do not satisfy the distinct-document threshold.
+
+Design adjudication: `SPELLING_ALIAS` may remain auto-confirmable only after findings 2–5 are fixed: human-approved, globally unique/non-quarantined, phrase-boundary matched, and attribute-compatible. Trade-name ties must not be replaced by an unapproved spelling/fuzzy guess; a valid approved alias may resolve the line because it is stronger evidence. The bilingual Thai/English cache, no-COALESCE search, Thai dosage guard, review-only `SPELLING_SUGGESTION`, and fuzzy contradiction guard are accepted directions pending regression after remediation.
+
+Required remediation: tests first; bump ruleset; reorder the approved alias gate; implement safe phrase matching and contradiction handling; add the real migration/lifecycle matrix; rerun full suite, safety scan, Phase E, and targeted non-vacuous revert checks. Append a new ledger section without editing §22. Do not seal/commit and do not begin Slice 3.
+
+Codex changed no production source, made no commit/push/deploy, and accessed no production/shared DB during this adjudication.
+
+---
+
+## 24. Temporary Senior Developer — Slice 2 BLOCKED remediation candidate (2026-08-20)
+
+**สถานะ: REMEDIATED CANDIDATE — awaiting Tech Lead re-adjudication; ห้าม seal/commit และยังไม่เริ่ม Slice 3**
+
+แก้เฉพาะ BLOCKED findings ใน §23 แบบ tests-first:
+
+| Finding | Remediation | Evidence |
+|---|---|---|
+| ruleset ใช้ v5 ซ้ำ | bump `ProductMatcher.RULESET_VERSION` เป็น `layer-f-v6` | `test_slice2_uses_a_new_ruleset_version` |
+| global alias substring unsafe | เพิ่ม `normalized_phrase_in_text()` จับเฉพาะ normalized phrase ที่มี whitespace boundary ทั้งสองด้าน; `PARA` ไม่จับ `XPARAX` และไม่เดา boundary ภายใน Thai run ที่ไม่เว้นวรรค | `test_spelling_alias_requires_a_whole_normalized_phrase` |
+| alias ข้าม attribute guard | ตรวจ strength/pack/dosage-form ด้วย `attributes_conflict()` ก่อน auto-confirm; conflict เป็น `UNRESOLVED`, reason `SPELLING_ALIAS_ATTRIBUTE_CONFLICT`, surface approved alias candidate และ block tier ที่อ่อนกว่า | `test_spelling_alias_strength_conflict_blocks_auto_confirm_and_weaker_tiers` |
+| heuristic มาก่อน approved alias | ย้าย SPELLING_ALIAS ไปหลัง explicit code/barcode, supplier ACTIVE_ALIAS และ EXACT_NAME แต่ก่อน INTERNAL_CODE_TEXT_MATCH/TRADE_NAME/SPELLING_SUGGESTION/FUZZY | `test_valid_spelling_alias_outranks_trade_name_heuristic`; Slice-1 precedence test ยังผ่าน |
+| migration/lifecycle ไม่มี SQLite integration | เพิ่ม fresh v1+v2 bootstrap, existing-v1→v2 upgrade, duplicate-document threshold, 3 distinct docs→ELIGIBLE→human approval→ACTIVE และ same phrase/different product→QUARANTINED ผ่าน `Repository`/SQLite จริง | `ProductNameAliasSQLiteIntegrationTests` 4 tests |
+
+**Tests-first / non-vacuous evidence:** ก่อนแก้ focused set fail จริง 4 assertions (v5, embedded substring,
+attribute conflict ถูก heuristic แทน, heuristic shadow approved alias). หลังแก้ focused remediation 22/22 ผ่าน.
+Targeted revert-check สองระดับ: (1) ย้อน v6→v5 และ phrase boundary→substring ชั่วคราว ทำให้ regression
+2/2 fail จริง; (2) ปิด approved-alias gate ชั่วคราว ทำให้ contradiction/precedence 2/2 fail จริงและกลับไป
+`TRADE_NAME_MATCH`. คืน production code ทุกจุดแล้ว focused 22/22 ผ่านซ้ำ.
+
+**Final verification:** full discovery **138/138 ผ่าน** ใน 29.830s; `scripts/safety_scan.py` ผ่าน
+(`secret_scan=pass`, `ada_query_catalog=pass`, findings ว่าง, live flags default off).
+
+**Phase E read-only rerun:** PostgreSQL `SHOW default_transaction_read_only` คืน `on`; ไม่ใช้ COALESCE;
+active catalog 6,665 (both languages 6,661, Thai-only 4). 189 samples: mean 713.850ms, median
+389.077ms, p95 2,171.877ms, max 2,438.268ms; first pass 9 lines รวม 4,782.18ms. ผล product/tier
+9 บรรทัดไม่ regression จาก Slice-2 candidate หลัง fuzzy guard: line 1/2/4/5/8/9 เป็น
+TRADE_NAME_MATCH, line 3/6 เป็น review-only FUZZY_SUGGESTION, line 7 เป็น review-only
+SPELLING_SUGGESTION. Raw evidence ถูกเขียนโดย ignored staging harness ไปยัง
+`ocr_runs_staging/realinv_20260820T040631Z/SLICE2_BILINGUAL_PHASE_E_RESULTS.json`.
+
+ไม่มี production/shared DB write, ไม่มี ADA/AdaAcc contact, ไม่มี stage/commit/push/PR/merge/deploy,
+ไม่ seal และไม่เริ่ม Slice 3. หยุดรอ Tech Lead ตรวจใหม่.
+
+---
+
+## 25. Codex re-adjudication of Slice 2 remediation (2026-08-20)
+
+**Verdict: APPROVED TO SEAL locally — no push/merge/deploy authority implied.**
+
+Codex independently reran the original adversarial probes and confirmed: embedded substring `PARA` no longer matches `XPARAX`; an approved 5mg alias against explicit 10mg OCR becomes `UNRESOLVED` with `SPELLING_ALIAS_ATTRIBUTE_CONFLICT` and cannot fall through; a valid human-approved alias now outranks heuristic trade-name retrieval; and the ruleset is `layer-f-v6`. Fresh full discovery passed 138/138, safety scan passed, and `git diff --check` is clean.
+
+The real SQLite coverage was inspected and accepted: fresh v1+v2 bootstrap, existing-v1 upgrade, duplicate-document non-promotion, three distinct documents → ELIGIBLE → approval → ACTIVE, and same phrase mapped to different products → all mappings QUARANTINED. The global alias may therefore remain auto-confirmable under the bounded contract established in §23: ACTIVE, globally unambiguous, whole normalized phrase, and no strength/pack/dosage contradiction.
+
+Accepted residuals: worst-case bilingual/spelling performance remains staging-only and should be optimized before bulk activation; Thai phrase matching deliberately refuses to infer word boundaries inside unspaced runs; reference-cache/alias-state versioning remains a future audit concern separate from the per-line input hash. Before sealing, update the nearby ruleset history comment to explicitly describe the v6 Slice-2 bump (comment-only hygiene).
+
+Seal only the intentional cumulative Slice-2 manifest by exact path: `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md`, `src/ocr_inbound/text_normalize.py`, `src/ocr_inbound/ada_read.py`, `src/ocr_inbound/db.py`, `src/ocr_inbound/migrations/0002_product_name_aliases.sql`, `src/ocr_inbound/matching.py`, `tests/test_matching.py`, `tests/test_matching_behavioral_revert_check.py`, and `tests/test_matching_integration.py`. Do not use `git add -A`; exclude `.playwright-cli/`, `environments/`, `docs/HANDOFF_SLICE2_TO_NEXT_SESSION_TH.md`, OCR run outputs, source documents, models, and credentials. Parent must remain `6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`; local commit only; do not begin Slice 3 without separate instruction.
+
+Codex changed no production source, made no commit/push/deploy, and accessed no production/shared DB during this re-adjudication.

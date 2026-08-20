@@ -26,8 +26,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import sqlite3
+import importlib.resources
 from pathlib import Path
 
+from ocr_inbound.config import build_profile
+from ocr_inbound.db import Repository
+from ocr_inbound.identity import Actor
 from ocr_inbound.service import Application
 
 
@@ -258,6 +263,65 @@ class MatchingPersistenceBoundaryIntegrationTests(unittest.TestCase):
         self.assertIsNone(prediction["product_code"])
         candidate_codes = {c["product_code"] for c in prediction["candidates"]}
         self.assertEqual(candidate_codes, {"IC-CONF-001", "IC-CONF-002"})
+
+
+class ProductNameAliasSQLiteIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory(prefix="name-alias-sqlite-")
+        self.profile = build_profile("staging", Path(self._tmpdir.name))
+        self.repository = Repository(self.profile)
+        self.actor = Actor("alias-reviewer", "Alias Reviewer", "TEST IDENTITY")
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_fresh_bootstrap_applies_v1_and_v2(self):
+        self.repository.migrate()
+        with self.repository.connect() as connection:
+            versions = [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
+            table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_name_aliases'").fetchone()
+        self.assertEqual(versions, [1, 2])
+        self.assertIsNotNone(table)
+
+    def test_existing_v1_database_upgrades_to_v2(self):
+        sql_v1 = importlib.resources.files("ocr_inbound").joinpath("migrations/0001_initial.sql").read_text(encoding="utf-8")
+        connection = sqlite3.connect(self.profile.app_db)
+        try:
+            connection.execute("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
+            connection.executescript(sql_v1)
+            connection.commit()
+        finally:
+            connection.close()
+        self.repository.migrate()
+        with self.repository.connect() as connection:
+            versions = [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
+            table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_name_aliases'").fetchone()
+        self.assertEqual(versions, [1, 2])
+        self.assertIsNotNone(table)
+
+    def test_three_distinct_documents_promote_then_human_approval_activates(self):
+        self.repository.migrate()
+        first = self.repository.record_name_alias_observation("MINIDIAB", "IC-000648", "doc-1", self.actor)
+        duplicate = self.repository.record_name_alias_observation("MINIDIAB", "IC-000648", "doc-1", self.actor)
+        second = self.repository.record_name_alias_observation("MINIDIAB", "IC-000648", "doc-2", self.actor)
+        self.assertEqual(first["status"], "CANDIDATE")
+        self.assertEqual(duplicate["distinct_document_count"], 1)
+        self.assertEqual(second["status"], "CANDIDATE")
+        eligible = self.repository.record_name_alias_observation("MINIDIAB", "IC-000648", "doc-3", self.actor)
+        self.assertEqual(eligible["status"], "ELIGIBLE")
+        active = self.repository.approve_name_alias(eligible["id"], self.actor)
+        self.assertEqual(active["status"], "ACTIVE")
+        self.assertEqual(active["approved_by"], self.actor.actor_id)
+        self.assertEqual(self.repository.list_name_aliases()[0]["status"], "ACTIVE")
+
+    def test_conflicting_products_quarantine_every_mapping_for_the_phrase(self):
+        self.repository.migrate()
+        first = self.repository.record_name_alias_observation("MINIDIAB", "IC-A", "doc-a", self.actor)
+        second = self.repository.record_name_alias_observation("MINIDIAB", "IC-B", "doc-b", self.actor)
+        rows = self.repository.list_name_aliases()
+        self.assertEqual(first["status"], "CANDIDATE")
+        self.assertEqual(second["status"], "QUARANTINED")
+        self.assertEqual({row["status"] for row in rows}, {"QUARANTINED"})
 
 
 if __name__ == "__main__":

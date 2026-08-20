@@ -44,7 +44,13 @@ from ocr_inbound.matching import (
 )
 
 
-AUTO_CONFIRMABLE_TIERS = {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS"}
+# Slice 2 adds SPELLING_ALIAS (docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22)
+# to the auto-confirmable set -- it goes through the exact same
+# observe-3-times-then-approve human lifecycle as ACTIVE_ALIAS (see
+# Repository.record_name_alias_observation/approve_name_alias), just scoped
+# globally instead of per-supplier. SPELLING_SUGGESTION ("did you mean") is
+# deliberately NOT in this set -- it is never auto-confirmable.
+AUTO_CONFIRMABLE_TIERS = {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS", "SPELLING_ALIAS"}
 
 
 class _NoAliasRepository:
@@ -53,17 +59,25 @@ class _NoAliasRepository:
     def list_aliases(self, supplier_code):
         return []
 
+    def list_name_aliases(self):
+        return []
+
 
 class _StaticAliasRepository:
     """Read-only stand-in carrying one pre-approved, human-confirmed alias,
     used to prove ACTIVE_ALIAS outranks TRADE_NAME_MATCH (Codex adjudication
-    finding 1)."""
+    finding 1). Slice 2: also carries `name_aliases`, an optional list of
+    pre-approved (ACTIVE-status) supplier-agnostic spelling/name aliases."""
 
-    def __init__(self, aliases):
+    def __init__(self, aliases, name_aliases=None):
         self._aliases = aliases
+        self._name_aliases = name_aliases or []
 
     def list_aliases(self, supplier_code):
         return [a for a in self._aliases if a["supplier_code"] == supplier_code]
+
+    def list_name_aliases(self):
+        return list(self._name_aliases)
 
 
 def _build_matcher(tmp_root: Path, products: list[dict], suppliers: list[dict] | None = None, repository=None) -> ProductMatcher:
@@ -91,8 +105,14 @@ def _build_matcher(tmp_root: Path, products: list[dict], suppliers: list[dict] |
     return ProductMatcher(repository if repository is not None else _NoAliasRepository(), cache)
 
 
-def _product(code, name, *, barcode=None, ingredient="", strength="", size="", units=None):
-    return {
+def _product(code, name, *, barcode=None, ingredient="", strength="", size="", units=None, name_thai=None, name_eng=None):
+    # Slice 2: `name_thai`/`name_eng`, when given, are passed through to
+    # AdaReferenceCache.refresh_from_fixture verbatim (real bilingual
+    # products). When neither is given, `name` alone is still accepted --
+    # the cache auto-splits it by detected script (see
+    # ada_read._split_bilingual_name) so every pre-Slice-2 call site of
+    # this helper keeps working unchanged.
+    product = {
         "product_code": code,
         "barcode": barcode,
         "name": name,
@@ -104,6 +124,11 @@ def _product(code, name, *, barcode=None, ingredient="", strength="", size="", u
         "active": True,
         "units": units or [{"unit_code": "BOX", "factor": "1", "active": True}],
     }
+    if name_thai is not None:
+        product["name_thai"] = name_thai
+    if name_eng is not None:
+        product["name_eng"] = name_eng
+    return product
 
 
 def _predict(
@@ -1016,6 +1041,258 @@ class BarcodeEvidenceTests(TmpCacheTestCase):
         result = _predict(matcher, "ZYNTREX FORTE 50 MG", barcode_candidates=["1111111111111", "2222222222222"])
         self.assertEqual(result["tier"], "UNRESOLVED")
         self.assertIsNone(result["proposed_product_code"])
+
+
+class BilingualNameMatchingTests(TmpCacheTestCase):
+    """Slice 2 (docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22): Thai,
+    English, and mixed-script trade-name retrieval, plus the new
+    SPELLING_ALIAS and SPELLING_SUGGESTION ("คุณหมายถึง...หรือไม่") tiers.
+    Covers the 11 minimum acceptance scenarios from the Slice 2 kickoff,
+    numbered in comments to match."""
+
+    def test_slice2_uses_a_new_ruleset_version(self):
+        self.assertEqual(ProductMatcher.RULESET_VERSION, "layer-f-v6")
+
+    def test_1_minidiab_english_and_thai_find_same_product(self):
+        products = [
+            _product(
+                "IC-000648",
+                "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_thai="ไฟเซอร์ มินิเดียบ ไกลพิไซด์ 5 มก 30 เม็ด",
+            )
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result_eng = _predict(matcher, "MINIDIAB 5mg 2x15's")
+        result_thai = _predict(matcher, "มินิเดียบ 5 มก")
+        self.assertEqual(result_eng["proposed_product_code"], "IC-000648")
+        self.assertEqual(result_thai["proposed_product_code"], "IC-000648")
+
+    def test_2_lesflam_english_and_thai_find_same_product(self):
+        products = [
+            _product(
+                "IC-002137",
+                "MEDLINE LESFLAM DICLOFENAC POTASSIUM 50 MG 10 S",
+                name_eng="MEDLINE LESFLAM DICLOFENAC POTASSIUM 50 MG 10 S",
+                name_thai="เมดไลน์ เลสแฟลม ไดโคลฟีแนค โพแทสเซียม 50 มก 10 เม็ด",
+            )
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result_eng = _predict(matcher, "LESFLAM 50 MG.TAB.10X10'S (Diclofenac Potassium 50 mg)")
+        result_thai = _predict(matcher, "เลสแฟลม 50 มก")
+        self.assertEqual(result_eng["proposed_product_code"], "IC-002137")
+        self.assertEqual(result_thai["proposed_product_code"], "IC-002137")
+
+    def test_3_thai_and_english_mixed_in_one_line_finds_same_product(self):
+        products = [
+            _product(
+                "IC-000648",
+                "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_thai="ไฟเซอร์ มินิเดียบ ไกลพิไซด์ 5 มก 30 เม็ด",
+            )
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result = _predict(matcher, "มินิเดียบ MINIDIAB 5mg")
+        self.assertEqual(result["proposed_product_code"], "IC-000648")
+
+    def test_4_single_typo_suggests_did_you_mean_without_auto_confirm(self):
+        products = [
+            _product(
+                "IC-000648",
+                "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+            )
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result = _predict(matcher, "MINIDIAP 5mg")
+        self.assertEqual(result["tier"], "SPELLING_SUGGESTION")
+        self.assertEqual(result["proposed_product_code"], "IC-000648")
+        self.assertNotIn(result["tier"], AUTO_CONFIRMABLE_TIERS)
+        self.assertTrue(result["provenance"]["human_confirmation_required"])
+        self.assertTrue(any(reason.startswith("DID_YOU_MEAN:") for reason in result["reason_codes"]))
+
+    def test_5_presolin_150_never_selects_300(self):
+        products = [
+            _product("IC-002001", "MEDLINE PRESOLIN IRBESARTAN 150 MG 10 S", name_eng="MEDLINE PRESOLIN IRBESARTAN 150 MG 10 S"),
+            _product("IC-002002", "MEDLINE PRESOLIN IRBESARTAN 300 MG 10 S", name_eng="MEDLINE PRESOLIN IRBESARTAN 300 MG 10 S"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result = _predict(matcher, "PRESOLIN 150 MG.TAB.10X10'S (Irbesartan 150 mg)")
+        self.assertEqual(result["proposed_product_code"], "IC-002001")
+        self.assertNotEqual(result["proposed_product_code"], "IC-002002")
+
+    def test_6_tablet_never_selects_syrup_cream_or_drop_thai_or_english(self):
+        products = [
+            _product("TESTDF-T01", "ZANTIX TABLET 150 MG 10 S", name_eng="ZANTIX TABLET 150 MG 10 S", name_thai="แซนทิกซ์ เม็ด 150 มก"),
+            _product("TESTDF-T02", "ZANTIX SYRUP 150 MG 60 ML", name_eng="ZANTIX SYRUP 150 MG 60 ML", name_thai="แซนทิกซ์ น้ำเชื่อม 150 มก"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result_eng = _predict(matcher, "ZANTIX TABLET 150 MG")
+        result_thai = _predict(matcher, "แซนทิกซ์ เม็ด 150 มก")
+        self.assertEqual(result_eng["proposed_product_code"], "TESTDF-T01")
+        self.assertEqual(result_thai["proposed_product_code"], "TESTDF-T01")
+
+    def test_7_supplier_name_alone_never_selects_a_product(self):
+        products = [
+            _product("IC-002137", "MEDLINE LESFLAM DICLOFENAC POTASSIUM 50 MG 10 S", name_eng="MEDLINE LESFLAM DICLOFENAC POTASSIUM 50 MG 10 S"),
+            _product("IC-000316", "MEDLINE OTHERDRUG PARACETAMOL 500 MG 10 S", name_eng="MEDLINE OTHERDRUG PARACETAMOL 500 MG 10 S"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result = _predict(matcher, "MEDLINE UNKNOWN ITEM", supplier_code="MEDLINE")
+        self.assertNotIn(result["tier"], AUTO_CONFIRMABLE_TIERS)
+        self.assertIsNone(result["proposed_product_code"])
+
+    def test_8_thai_name_differing_only_by_spacing_still_found(self):
+        products = [
+            _product(
+                "IC-000648",
+                "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S",
+                name_thai="ไฟเซอร์  มินิเดียบ   ไกลพิไซด์ 5 มก 30 เม็ด",
+            )
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        # Query text has different (single-space) spacing from the master
+        # name's irregular double/triple spacing above -- normalize_product_text
+        # collapses both to the same token stream either way.
+        result = _predict(matcher, "มินิเดียบ 5 มก")
+        self.assertEqual(result["proposed_product_code"], "IC-000648")
+
+    def test_9_similar_name_multiple_products_is_unresolved_with_top_candidates(self):
+        # Two products genuinely tied on the only distinctive shared token
+        # ("MATRACOL"; "SUSPENSION" is a dosage-form stopword, excluded from
+        # retrieval on both sides) -- there is no principled basis to prefer
+        # either, so the line must come back UNRESOLVED, not a guess, while
+        # BOTH still appear in candidate_set for a human to pick from.
+        products = [
+            _product("TESTMX-001", "MATRACOL SUSPENSION 200 ML", name_eng="MATRACOL SUSPENSION 200 ML"),
+            _product("TESTMX-002", "MATRACOL FORTE SUSPENSION 200 ML", name_eng="MATRACOL FORTE SUSPENSION 200 ML"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        # "BATCH99" keeps this from exactly matching either full master name
+        # (which would resolve via EXACT_NAME before trade-name retrieval
+        # even runs) without affecting the tie -- it contains a digit, so
+        # extract_trade_name_tokens excludes it from retrieval entirely.
+        result = _predict(matcher, "MATRACOL SUSPENSION 200 ML BATCH99")
+        self.assertEqual(result["tier"], "UNRESOLVED")
+        self.assertIsNone(result["proposed_product_code"])
+        candidate_codes = {c["product_code"] for c in result["candidate_set"]}
+        self.assertEqual(candidate_codes, {"TESTMX-001", "TESTMX-002"})
+
+    def test_10_raw_master_name_is_never_modified(self):
+        raw_name_eng = "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S"
+        raw_name_thai = "ไฟเซอร์ มินิเดียบ ไกลพิไซด์ 5 มก 30 เม็ด"
+        products = [_product("IC-000648", raw_name_eng, name_eng=raw_name_eng, name_thai=raw_name_thai)]
+        matcher = _build_matcher(self.tmp_root, products)
+        _predict(matcher, "มินิเดียบ MINIDIAB 5mg")  # exercise both retrieval paths
+        stored = matcher.cache.get_product("IC-000648")
+        self.assertEqual(stored["name_eng"], raw_name_eng)
+        self.assertEqual(stored["name_thai"], raw_name_thai)
+
+    def test_11_slice1_active_alias_still_outranks_spelling_alias(self):
+        products = [
+            _product("IC-AAA", "PRODUCT A UNRELATED NAME", name_eng="PRODUCT A UNRELATED NAME"),
+            _product("IC-ZZZ", "PRODUCT Z ANOTHER UNRELATED NAME", name_eng="PRODUCT Z ANOTHER UNRELATED NAME"),
+        ]
+        repo = _StaticAliasRepository(
+            [{"supplier_code": "ACME", "status": "ACTIVE", "normalized_supplier_text": "SKU777", "ada_product_code": "IC-AAA"}],
+            name_aliases=[{"normalized_text": "MINIDIAB", "ada_product_code": "IC-ZZZ", "status": "ACTIVE"}],
+        )
+        matcher = _build_matcher(self.tmp_root, products, repository=repo)
+        result = _predict(matcher, "GENERIC INVOICE LINE TEXT", supplier_sku="SKU777", supplier_code="ACME")
+        self.assertEqual(result["tier"], "ACTIVE_ALIAS")
+        self.assertEqual(result["proposed_product_code"], "IC-AAA")
+
+    def test_spelling_alias_auto_confirms_and_outranks_did_you_mean(self):
+        products = [
+            _product("IC-000648", "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S", name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S"),
+        ]
+        repo = _StaticAliasRepository(
+            [],
+            name_aliases=[{"normalized_text": "มินิเดียบ", "ada_product_code": "IC-000648", "status": "ACTIVE"}],
+        )
+        matcher = _build_matcher(self.tmp_root, products, repository=repo)
+        result = _predict(matcher, "มินิเดียบ 5 มก")
+        self.assertEqual(result["tier"], "SPELLING_ALIAS")
+        self.assertEqual(result["proposed_product_code"], "IC-000648")
+        self.assertIn(result["tier"], AUTO_CONFIRMABLE_TIERS)
+        self.assertFalse(result["provenance"]["human_confirmation_required"])
+
+    def test_spelling_alias_requires_a_whole_normalized_phrase(self):
+        products = [_product("IC-PARA", "PARA PRODUCT", name_eng="PARA PRODUCT")]
+        repo = _StaticAliasRepository(
+            [], name_aliases=[{"normalized_text": "PARA", "ada_product_code": "IC-PARA", "status": "ACTIVE"}]
+        )
+        matcher = _build_matcher(self.tmp_root, products, repository=repo)
+        result = _predict(matcher, "XPARAX UNKNOWN")
+        self.assertNotEqual(result["tier"], "SPELLING_ALIAS")
+        self.assertTrue(result["provenance"]["human_confirmation_required"])
+
+    def test_spelling_alias_strength_conflict_blocks_auto_confirm_and_weaker_tiers(self):
+        products = [
+            _product("IC-MINI-5", "MINIDIAB 5 MG TABLET", name_eng="MINIDIAB 5 MG TABLET"),
+            _product("IC-MINI-10", "MINIDIAB 10 MG TABLET", name_eng="MINIDIAB 10 MG TABLET"),
+        ]
+        repo = _StaticAliasRepository(
+            [], name_aliases=[{"normalized_text": "MINIDIAB", "ada_product_code": "IC-MINI-5", "status": "ACTIVE"}]
+        )
+        matcher = _build_matcher(self.tmp_root, products, repository=repo)
+        result = _predict(matcher, "MINIDIAB 10 MG TABLET BATCH99")
+        self.assertEqual(result["tier"], "UNRESOLVED")
+        self.assertIsNone(result["proposed_product_code"])
+        self.assertIn("SPELLING_ALIAS_ATTRIBUTE_CONFLICT", result["reason_codes"])
+        self.assertEqual(result["candidate_set"][0]["product_code"], "IC-MINI-5")
+
+    def test_valid_spelling_alias_outranks_trade_name_heuristic(self):
+        products = [
+            _product("IC-HUMAN", "HUMAN APPROVED PRODUCT 10 MG TABLET", name_eng="HUMAN APPROVED PRODUCT 10 MG TABLET"),
+            _product("IC-HEUR", "MINIDIAB 10 MG TABLET", name_eng="MINIDIAB 10 MG TABLET"),
+        ]
+        repo = _StaticAliasRepository(
+            [], name_aliases=[{"normalized_text": "TYPOALIAS", "ada_product_code": "IC-HUMAN", "status": "ACTIVE"}]
+        )
+        matcher = _build_matcher(self.tmp_root, products, repository=repo)
+        result = _predict(matcher, "MINIDIAB 10 MG TABLET TYPOALIAS")
+        self.assertEqual(result["tier"], "SPELLING_ALIAS")
+        self.assertEqual(result["proposed_product_code"], "IC-HUMAN")
+
+    def test_candidate_set_always_agrees_with_proposed_product_code_bilingual(self):
+        # Slice 1's consistency guarantee must keep holding for every new
+        # Slice 2 tier too.
+        products = [
+            _product("IC-000648", "PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S", name_eng="PFIZER MINIDIAB GLIPIZIDE 5 MG 30 S"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        result = _predict(matcher, "MINIDIAP 5mg")  # SPELLING_SUGGESTION path
+        self.assertEqual(result["candidate_set"][0]["product_code"], result["proposed_product_code"])
+
+    def test_whole_catalog_fuzzy_fallback_never_proposes_a_pack_dimension_contradiction(self):
+        # Found via the real ~6,665-product Phase E rerun (Slice 2, see
+        # docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22): the whole-catalog
+        # SequenceMatcher fuzzy fallback never ran the attribute-contradiction
+        # guard at all (only trade-name retrieval did), so it proposed a
+        # 3x3-INCH wound dressing for a line that explicitly stated
+        # "10x20cm" -- a real, stated pack-size contradiction that should
+        # have blocked the candidate in ANY tier, not just trade-name
+        # retrieval.
+        products = [
+            _product("IC-RIGHT-SIZE", "GAUZE PAD WOUND DRESSING 10X20 CM", name_eng="GAUZE PAD WOUND DRESSING 10X20 CM"),
+            _product("IC-WRONG-SIZE", "GAUZE PAD WOUND DRESSING 3X3 INC", name_eng="GAUZE PAD WOUND DRESSING 3X3 INC"),
+        ]
+        matcher = _build_matcher(self.tmp_root, products)
+        # "DRSNG" is the only word long/specific enough to be extracted as a
+        # trade-name token, but it doesn't appear in EITHER candidate's
+        # name, so trade-name retrieval finds nothing and the line falls
+        # all the way through to the whole-catalog fuzzy sweep -- the exact
+        # code path the real invoice line took. "10X20" makes this line's
+        # own stated pack dimension explicit (and, pre-fix, high enough
+        # character-level similarity to the WRONG 3X3 product to have been
+        # proposed by the unguarded fuzzy fallback).
+        result = _predict(matcher, "GAZ PAD DRSNG 10X20 CM SET")
+        candidate_codes = {c["product_code"] for c in result["candidate_set"]}
+        self.assertNotIn("IC-WRONG-SIZE", candidate_codes)
+        self.assertNotEqual(result["proposed_product_code"], "IC-WRONG-SIZE")
 
 
 if __name__ == "__main__":

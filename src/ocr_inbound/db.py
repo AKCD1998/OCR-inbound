@@ -74,6 +74,7 @@ class Repository:
         if existed:
             self.backup("pre-migration")
         sql = importlib.resources.files("ocr_inbound").joinpath("migrations/0001_initial.sql").read_text(encoding="utf-8")
+        sql_0002 = importlib.resources.files("ocr_inbound").joinpath("migrations/0002_product_name_aliases.sql").read_text(encoding="utf-8")
         connection = self.connect()
         try:
             # Journal mode is persistent database metadata. Setting it once at
@@ -83,6 +84,9 @@ class Repository:
             version = connection.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
             if version < 1:
                 connection.executescript(sql)
+                version = 1
+            if version < 2:
+                connection.executescript(sql_0002)
             connection.commit()
         finally:
             connection.close()
@@ -495,6 +499,51 @@ class Repository:
             else:
                 rows = connection.execute("SELECT * FROM supplier_product_aliases ORDER BY supplier_code,normalized_supplier_text")
             return [dict(row) for row in rows]
+
+    # --- Slice 2: supplier-agnostic spelling/name aliases (see 0002_product_name_aliases.sql) ---
+
+    def record_name_alias_observation(self, normalized_text: str, product_code: str, document_id: str, actor: Actor) -> dict:
+        timestamp = now_iso()
+        with self.transaction() as connection:
+            existing = connection.execute("SELECT * FROM product_name_aliases WHERE normalized_text=? AND ada_product_code=?", (normalized_text, product_code)).fetchone()
+            if existing is None:
+                alias_id = new_id("nal")
+                self._insert(connection, "product_name_aliases", {"id": alias_id, "normalized_text": normalized_text, "ada_product_code": product_code, "status": "CANDIDATE", "confirmation_count": 1, "correction_count": 0, "distinct_document_count": 1, "observed_document_ids_json": canonical_json([document_id]), "created_at": timestamp, "updated_at": timestamp})
+            else:
+                alias_id = existing["id"]
+                observed_ids = set(json.loads(existing["observed_document_ids_json"]))
+                observed_ids.add(document_id)
+                count = len(observed_ids)
+                status = "ELIGIBLE" if count >= 3 and existing["status"] == "CANDIDATE" else existing["status"]
+                connection.execute("UPDATE product_name_aliases SET confirmation_count=confirmation_count+1,distinct_document_count=?,observed_document_ids_json=?,status=?,updated_at=?,version=version+1 WHERE id=?", (count, canonical_json(sorted(observed_ids)), status, timestamp, alias_id))
+            conflicts = connection.execute("SELECT COUNT(DISTINCT ada_product_code) FROM product_name_aliases WHERE normalized_text=?", (normalized_text,)).fetchone()[0]
+            if conflicts > 1:
+                connection.execute("UPDATE product_name_aliases SET status='QUARANTINED',updated_at=? WHERE normalized_text=?", (timestamp, normalized_text))
+            self._insert_audit(connection, actor.actor_id, "NAME_ALIAS_OBSERVED", "product_name_alias", alias_id, new_id("corr"), {"document_id": document_id, "conflict": conflicts > 1})
+        return self.get_name_alias(alias_id)
+
+    def approve_name_alias(self, alias_id: str, actor: Actor) -> dict:
+        timestamp = now_iso()
+        with self.transaction() as connection:
+            alias = connection.execute("SELECT * FROM product_name_aliases WHERE id=?", (alias_id,)).fetchone()
+            if alias is None:
+                raise DomainError("NAME_ALIAS_NOT_FOUND", "Name alias not found")
+            if alias["status"] != "ELIGIBLE":
+                raise DomainError("NAME_ALIAS_NOT_ELIGIBLE", "Name alias requires 3 distinct documents and no conflict")
+            connection.execute("UPDATE product_name_aliases SET status='ACTIVE',approved_by=?,updated_at=?,version=version+1 WHERE id=?", (actor.actor_id, timestamp, alias_id))
+            self._insert_audit(connection, actor.actor_id, "NAME_ALIAS_APPROVED", "product_name_alias", alias_id, new_id("corr"), {"distinct_document_count": alias["distinct_document_count"]})
+        return self.get_name_alias(alias_id)
+
+    def get_name_alias(self, alias_id: str) -> dict:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM product_name_aliases WHERE id=?", (alias_id,)).fetchone()
+        if row is None:
+            raise DomainError("NAME_ALIAS_NOT_FOUND", "Name alias not found")
+        return dict(row)
+
+    def list_name_aliases(self) -> list[dict]:
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM product_name_aliases ORDER BY normalized_text")]
 
     def create_automation_run(self, payload: dict) -> dict:
         run_id = new_id("ada")

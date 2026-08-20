@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import unicodedata
 from difflib import SequenceMatcher
 
 from .ada_read import AdaReferenceCache
 from .db import Repository, canonical_json
+from .text_normalize import detect_script, normalize_product_text  # noqa: F401 (re-exported for existing import sites)
 
 
 # Real internal codes come in two shapes: `IC-` followed by four to six
@@ -44,6 +44,24 @@ _TRADE_NAME_STOPWORDS = frozenset(
 )
 _MIN_TRADE_NAME_TOKEN_LEN = 4
 
+# Thai script carries more information per character than Latin script (no
+# vowel-only or two-letter function words the way English has "OF"/"TO"),
+# so a Thai retrieval token can safely be shorter than the Latin minimum
+# above while still being specific enough to serve as retrieval evidence.
+_MIN_THAI_TRADE_NAME_TOKEN_LEN = 3
+
+# Thai equivalents of the generic dosage-form/unit/connector words above --
+# same purpose: "เม็ด" (tablet) or "ยา" (drug/medicine, appears in nearly
+# every Thai product name) alone must never be treated as trade-name
+# retrieval evidence, exactly like "TABLET" or "MEDICINE" would not be.
+_THAI_TRADE_NAME_STOPWORDS = frozenset(
+    {
+        "ยา", "เม็ด", "แคปซูล", "ครีม", "เจล", "น้ำเชื่อม", "ยาน้ำ", "หยด",
+        "สเปรย์", "ฉีด", "ขี้ผึ้ง", "ผง", "โลชั่น", "แผง", "ขวด", "กล่อง",
+        "ชิ้น", "และ", "หรือ", "กับ", "สำหรับ", "ของ",
+    }
+)
+
 # A token that appears in more than this many DISTINCT master products is
 # treated as too generic to serve as sole retrieval evidence (a manufacturer/
 # brand-line prefix like "MEDLINE" spans dozens of unrelated items, and a
@@ -77,11 +95,29 @@ _DOSAGE_FORM_MAP = {
 }
 _DOSAGE_FORM_RE = re.compile(r"[A-Z]+")
 
-
-def normalize_product_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value or "").upper()
-    normalized = re.sub(r"[^0-9A-Zก-๙]+", " ", normalized)
-    return " ".join(normalized.split())
+# Thai equivalents of the same canonical dosage-form categories (Slice 2) --
+# the contradiction guard must work the same way regardless of which
+# language the OCR text or the master name happens to be in; a Thai "เม็ด"
+# (tablet) contradicting an English "SYRUP" is exactly as real a
+# contradiction as "TABLET" vs "SYRUP" would be.
+_THAI_DOSAGE_FORM_MAP = {
+    "เม็ด": "TABLET",
+    "แคปซูล": "CAPSULE",
+    "น้ำเชื่อม": "SYRUP", "ยาน้ำ": "SYRUP",
+    "ครีม": "CREAM",
+    "เจล": "GEL",
+    "สารละลาย": "SOLUTION",
+    "หยด": "DROP",
+    "สเปรย์": "SPRAY",
+    "ฉีด": "INJECTION", "ยาฉีด": "INJECTION",
+    "ขี้ผึ้ง": "OINTMENT",
+    "ยาแขวนตะกอน": "SUSPENSION",
+    "ผง": "POWDER",
+    "โลชั่น": "LOTION",
+    "แผ่นแปะ": "PATCH",
+    "ซอง": "SACHET",
+}
+_THAI_DOSAGE_FORM_RE = re.compile(r"[ก-๙]+")
 
 
 def normalize_supplier_sku(value: str | None) -> str | None:
@@ -100,23 +136,47 @@ def normalize_supplier_sku(value: str | None) -> str | None:
     return normalize_product_text(value) if value else None
 
 
+def normalized_phrase_in_text(phrase: str, text: str) -> bool:
+    """Match a normalized alias as a complete whitespace-delimited phrase.
+
+    Both values must already use ``normalize_product_text``. This deliberately
+    rejects character-substring matches such as ``PARA`` inside ``XPARAX``;
+    for Thai it applies the same explicit phrase-boundary contract and does
+    not guess word boundaries inside an unspaced Thai run.
+    """
+    if not phrase or not text:
+        return False
+    return re.search(rf"(?:^| ){re.escape(phrase)}(?: |$)", text) is not None
+
+
 def extract_trade_name_tokens(normalized_text: str) -> list[str]:
     """Words specific enough to serve as a safe trade-name retrieval key:
-    at least four characters, no digit (strength/pack numbers are handled
-    separately as attributes, not as name tokens), and not a generic
-    dosage-form/unit/connector word. Sorted longest first so more specific
-    tokens are tried before shorter, more ambiguous ones. Supplier/
-    manufacturer-name exclusion happens later, in
+    long enough (four characters for Latin words, three for Thai words --
+    see `_MIN_THAI_TRADE_NAME_TOKEN_LEN`), no digit (strength/pack numbers
+    are handled separately as attributes, not as name tokens), and not a
+    generic dosage-form/unit/connector word IN ITS OWN SCRIPT (Thai and
+    Latin stopword lists are both checked; a mixed Thai+English line
+    naturally produces a mix of Thai and Latin tokens since
+    `normalize_product_text` never merges the two scripts together). Sorted
+    longest first so more specific tokens are tried before shorter, more
+    ambiguous ones. Supplier/manufacturer-name exclusion happens later, in
     ProductMatcher._trade_name_candidates, where the invoicing document's
     own supplier is known -- this function has no document context."""
     tokens: list[str] = []
     for word in normalized_text.split():
-        if len(word) < _MIN_TRADE_NAME_TOKEN_LEN:
-            continue
         if any(ch.isdigit() for ch in word):
             continue
-        if word in _TRADE_NAME_STOPWORDS:
-            continue
+        script = detect_script(word)
+        if script == "THAI":
+            if len(word) < _MIN_THAI_TRADE_NAME_TOKEN_LEN or word in _THAI_TRADE_NAME_STOPWORDS:
+                continue
+        else:
+            # LATIN or MIXED (a token can't actually be MIXED post-normalize
+            # since Thai/Latin runs are whitespace-separated by
+            # normalize_product_text, but treat conservatively as Latin-rule
+            # if it ever happens) -- use the original English-tuned rule.
+            if len(word) < _MIN_TRADE_NAME_TOKEN_LEN or word in _TRADE_NAME_STOPWORDS:
+                continue
         tokens.append(word)
     seen: set[str] = set()
     ordered: list[str] = []
@@ -127,15 +187,52 @@ def extract_trade_name_tokens(normalized_text: str) -> list[str]:
     return ordered
 
 
+def within_edit_distance_one(a: str, b: str) -> bool:
+    """True when `a` can become `b` via at most one single-character
+    insertion, deletion, or substitution. Used for the "คุณหมายถึง...หรือไม่"
+    ("did you mean...?") spelling-suggestion tier -- a cheap, dependency-free
+    check (no full Levenshtein DP table needed) that catches the single most
+    common real OCR failure mode: one character read wrong, dropped, or
+    doubled (e.g. "MINIDIAP" vs "MINIDIAB", one substitution)."""
+    if a == b:
+        return False  # not a correction, it's the same token
+    len_a, len_b = len(a), len(b)
+    if abs(len_a - len_b) > 1:
+        return False
+    if len_a == len_b:
+        differences = sum(1 for x, y in zip(a, b) if x != y)
+        return differences == 1
+    # One is exactly one character longer -- check if deleting that one
+    # character from the longer string yields the shorter string.
+    shorter, longer = (a, b) if len_a < len_b else (b, a)
+    i = j = 0
+    skipped = False
+    while i < len(shorter) and j < len(longer):
+        if shorter[i] == longer[j]:
+            i += 1
+            j += 1
+        elif not skipped:
+            skipped = True
+            j += 1
+        else:
+            return False
+    return True
+
+
 def extract_attributes(text: str) -> dict:
     """Strength (value+unit), pack-dimension (AxB), and dosage-form tokens
     found in a piece of text, used only as a contradiction guard -- never
     as a positive-match requirement, since either side (OCR text or a
-    master product's name) may simply omit an attribute."""
+    master product's name) may simply omit an attribute. Dosage-form
+    detection is bilingual (Slice 2): both English and Thai dosage words
+    are recognized and mapped to the SAME canonical category set, so a
+    Thai-language OCR line and an English-language master name still
+    correctly contradict (or agree) with each other."""
     upper = (text or "").upper()
     strengths = {(float(value), unit) for value, unit in _STRENGTH_RE.findall(upper)}
     packs = {(int(a), int(b)) for a, b in _PACK_DIM_RE.findall(upper)}
     dosage_forms = {_DOSAGE_FORM_MAP[word] for word in _DOSAGE_FORM_RE.findall(upper) if word in _DOSAGE_FORM_MAP}
+    dosage_forms |= {_THAI_DOSAGE_FORM_MAP[word] for word in _THAI_DOSAGE_FORM_RE.findall(upper) if word in _THAI_DOSAGE_FORM_MAP}
     return {"strengths": strengths, "packs": packs, "dosage_forms": dosage_forms}
 
 
@@ -262,7 +359,13 @@ class ProductMatcher:
     # RULESET_VERSION again marks that the input_hash formula in effect for
     # every Slice-1-remediated prediction differs from what `layer-f-v4`
     # denoted for anything predicted before this round.
-    RULESET_VERSION = "layer-f-v5"
+    #
+    # Bumped to layer-f-v6 for Slice 2 (see ledger sections 22-25): product
+    # names are searched as independent Thai/English fields; Thai/mixed
+    # token and dosage-form handling, approved global spelling aliases,
+    # review-only spelling suggestions, and the fuzzy attribute guard all
+    # materially change the matching rules compared with sealed Slice 1.
+    RULESET_VERSION = "layer-f-v6"
 
     def __init__(self, repository: Repository, cache: AdaReferenceCache) -> None:
         self.repository = repository
@@ -321,22 +424,44 @@ class ProductMatcher:
         return [str(item).strip() for item in raw if str(item).strip()]
 
     def _trade_name_candidates(
-        self, document: dict, source_attrs: dict, normalized: str, description_normalized: str
+        self,
+        document: dict,
+        source_attrs: dict,
+        normalized: str,
+        description_normalized: str,
+        override_tokens: list[str] | None = None,
     ) -> tuple[list[tuple[dict, str]], bool]:
         """Returns (ranked [(product, score_string), ...] up to 5, is_tied).
         is_tied is True when the top two survivors are equally well
         supported after every guard -- callers must not auto-pick a "first"
-        candidate in that case."""
-        tokens = extract_trade_name_tokens(normalized) or extract_trade_name_tokens(description_normalized)
-        supplier_tokens = self._supplier_name_tokens(document)
-        tokens = [t for t in tokens if t not in supplier_tokens]
+        candidate in that case.
+
+        `override_tokens`, when given, is used verbatim INSTEAD of
+        extracting tokens from `normalized`/`description_normalized` --
+        this is how the SPELLING_SUGGESTION tier (see
+        `_spelling_suggestion_candidates`) reuses every guard in this
+        method (generic-token exclusion, attribute-contradiction blocking,
+        tie detection) against a spelling-corrected token list, instead of
+        duplicating this logic against a second, less-tested code path."""
+        if override_tokens is not None:
+            tokens = override_tokens
+        else:
+            tokens = extract_trade_name_tokens(normalized) or extract_trade_name_tokens(description_normalized)
+            supplier_tokens = self._supplier_name_tokens(document)
+            tokens = [t for t in tokens if t not in supplier_tokens]
         if not tokens:
             return [], False
 
         products = self.cache.list_products()
+        # Bilingual retrieval haystack (Slice 2): built from name_thai AND
+        # name_eng independently, never a COALESCE-collapsed single name --
+        # a product with only an English or only a Thai name still works
+        # (the missing field is simply None/omitted from the join), and a
+        # product with BOTH is searchable by either language's tokens in
+        # the same pass.
         haystacks = {
             product["product_code"]: normalize_product_text(
-                " ".join(filter(None, [product.get("name"), product.get("ingredient") or ""]))
+                " ".join(filter(None, [product.get("name_thai"), product.get("name_eng"), product.get("ingredient") or ""]))
             )
             for product in products
         }
@@ -370,7 +495,7 @@ class ProductMatcher:
         survivors: list[tuple[dict, list[str], dict]] = []
         for product, hits in matched:
             candidate_text = " ".join(
-                filter(None, [product.get("name"), product.get("strength") or "", product.get("size") or ""])
+                filter(None, [product.get("name_thai"), product.get("name_eng"), product.get("strength") or "", product.get("size") or ""])
             )
             candidate_attrs = extract_attributes(candidate_text)
             if attributes_conflict(source_attrs, candidate_attrs):
@@ -412,6 +537,70 @@ class ProductMatcher:
             score = 0.5 + 0.3 * coverage + 0.05 * min(agreement_count(candidate_attrs), 2)
             ranked.append((product, f"{min(score, 0.90):.4f}"))
         return ranked, is_tied
+
+    def _spelling_suggestion_candidates(
+        self, document: dict, source_attrs: dict, normalized: str, description_normalized: str
+    ) -> tuple[list[tuple[dict, str]], bool, dict[str, str]]:
+        """"คุณหมายถึง...หรือไม่" -- Slice 2's spelling/typo suggestion tier.
+        Only meaningful when ordinary trade-name retrieval found NOTHING at
+        all for this line (checked by the caller before invoking this): for
+        each OCR token that has zero hits anywhere in the catalog, looks for
+        a catalog vocabulary token within one single-character edit (see
+        `within_edit_distance_one`) that is NOT itself an over-generic token
+        (same `_GENERIC_TOKEN_MAX_PRODUCTS` threshold as ordinary retrieval),
+        then reruns trade-name retrieval with the corrected token substituted
+        in -- reusing every existing guard (attribute-contradiction
+        blocking, tie detection, generic-token exclusion) via
+        `_trade_name_candidates(override_tokens=...)` rather than
+        duplicating that logic. Returns (ranked candidates, is_tied,
+        {original_token: corrected_token} for every correction actually
+        applied) -- the corrections dict is empty when no plausible
+        correction was found for anything, which the caller uses to decide
+        whether to report `SPELLING_SUGGESTION` at all."""
+        tokens = extract_trade_name_tokens(normalized) or extract_trade_name_tokens(description_normalized)
+        supplier_tokens = self._supplier_name_tokens(document)
+        tokens = [t for t in tokens if t not in supplier_tokens]
+        if not tokens:
+            return [], False, {}
+
+        products = self.cache.list_products()
+        haystacks = {
+            product["product_code"]: normalize_product_text(
+                " ".join(filter(None, [product.get("name_thai"), product.get("name_eng"), product.get("ingredient") or ""]))
+            )
+            for product in products
+        }
+        vocabulary_counts: dict[str, int] = {}
+        for haystack in haystacks.values():
+            for word in set(extract_trade_name_tokens(haystack)):
+                vocabulary_counts[word] = vocabulary_counts.get(word, 0) + 1
+
+        corrections: dict[str, str] = {}
+        for token in tokens:
+            if token in vocabulary_counts:
+                continue  # a real hit exists; ordinary retrieval already tried this token
+            best_match: str | None = None
+            for candidate_word, count in vocabulary_counts.items():
+                if count > _GENERIC_TOKEN_MAX_PRODUCTS:
+                    continue
+                if not within_edit_distance_one(token, candidate_word):
+                    continue
+                if best_match is None or (count, len(candidate_word)) < (vocabulary_counts[best_match], len(best_match)):
+                    # Prefer the LEAST generic (lowest product count) match,
+                    # and among equally-specific matches the longer/more
+                    # descriptive one -- the same "specific evidence wins"
+                    # principle ordinary retrieval already follows.
+                    best_match = candidate_word
+            if best_match:
+                corrections[token] = best_match
+        if not corrections:
+            return [], False, {}
+
+        corrected_tokens = [corrections.get(t, t) for t in tokens]
+        ranked, is_tied = self._trade_name_candidates(
+            document, source_attrs, normalized, description_normalized, override_tokens=corrected_tokens
+        )
+        return ranked, is_tied, corrections
 
     def _predict(self, document: dict, line: dict, ocr_versions: dict) -> dict:
         # --- Field contract (Slice 1) ---------------------------------------
@@ -588,6 +777,53 @@ class ProductMatcher:
             if len(exact_names) == 1:
                 selected, tier, method, reasons = exact_names[0], "EXACT_NAME", "exact_normalized_name", ["MASTER_NAME_EXACT"]
 
+        # A globally-approved spelling/name alias is stronger than every
+        # unapproved heuristic tier, but remains below explicit identifiers,
+        # supplier-scoped ACTIVE_ALIAS, and deterministic EXACT_NAME. Match
+        # only a complete normalized phrase; an approved alias never grants
+        # permission to match arbitrary character substrings. Attribute
+        # contradictions quarantine the alias proposal for human review and
+        # prevent every weaker tier from erasing that conflict.
+        source_attrs = extract_attributes(normalized)
+        if selected is None and not quarantined:
+            text_scan = normalize_product_text(code_scan_text)
+            active_name_aliases = [a for a in self.repository.list_name_aliases() if a["status"] == "ACTIVE"]
+            name_alias_matches = [
+                alias
+                for alias in active_name_aliases
+                if normalized_phrase_in_text(normalize_product_text(alias["normalized_text"]), text_scan)
+            ]
+            resolved_alias_products: dict[str, dict] = {}
+            conflicting_alias_products: dict[str, dict] = {}
+            for alias in name_alias_matches:
+                candidate = self.cache.get_product(alias["ada_product_code"])
+                if not candidate:
+                    continue
+                candidate_text = " ".join(
+                    filter(None, [candidate.get("name_thai"), candidate.get("name_eng"), candidate.get("strength") or "", candidate.get("size") or ""])
+                )
+                if attributes_conflict(source_attrs, extract_attributes(candidate_text)):
+                    conflicting_alias_products[candidate["product_code"]] = candidate
+                else:
+                    resolved_alias_products[candidate["product_code"]] = candidate
+            if conflicting_alias_products:
+                quarantined = True
+                tier, method, reasons = "UNRESOLVED", "unresolved_human", ["SPELLING_ALIAS_ATTRIBUTE_CONFLICT"]
+                candidates = [
+                    {"product_code": product["product_code"], "name": product["name"], "score": "0.0000", "purchase_count": 0}
+                    for product in sorted(conflicting_alias_products.values(), key=lambda item: item["product_code"])
+                ]
+            elif len(resolved_alias_products) == 1:
+                selected = next(iter(resolved_alias_products.values()))
+                tier, method, reasons = "SPELLING_ALIAS", "approved_spelling_alias", ["NAMED_APPROVED_SPELLING_ALIAS"]
+            elif len(resolved_alias_products) > 1:
+                quarantined = True
+                tier, method, reasons = "UNRESOLVED", "unresolved_human", ["SPELLING_ALIAS_CONFLICT_MULTIPLE_PRODUCTS"]
+                candidates = [
+                    {"product_code": product["product_code"], "name": product["name"], "score": "0.0000", "purchase_count": 0}
+                    for product in sorted(resolved_alias_products.values(), key=lambda item: item["product_code"])
+                ]
+
         # INTERNAL_CODE_TEXT_MATCH -- a digit run found by scanning free OCR
         # text that happens to equal a real product code, with NO explicit
         # provenance backing it. Structurally identical in spirit to
@@ -606,9 +842,12 @@ class ProductMatcher:
                 ["INTERNAL_CODE_TEXT_UNIQUE_NO_PROVENANCE_HUMAN_REQUIRED"] if unique else ["INTERNAL_CODE_TEXT_MULTIPLE_CANDIDATES_HUMAN_REQUIRED"],
             )
 
+        # Bilingual trade-name retrieval (Slice 2 -- Thai, English, and
+        # mixed-script OCR text all flow through the SAME call here;
+        # `extract_trade_name_tokens`/haystack construction are bilingual as
+        # of this slice, see docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22).
         trade_name_candidates: list[tuple[dict, str]] = []
         if selected is None and not quarantined:
-            source_attrs = extract_attributes(normalized)
             trade_name_candidates, trade_name_tie = self._trade_name_candidates(
                 document, source_attrs, normalized, description_normalized
             )
@@ -626,6 +865,34 @@ class ProductMatcher:
                 # product is proposed. The tied candidates are still shown
                 # (see candidate_set population below) for a human to choose.
                 tier, method, reasons = "UNRESOLVED", "unresolved_human", ["TRADE_NAME_TOKEN_AMBIGUOUS_TIE_NO_AUTO_PICK"]
+
+        # SPELLING_SUGGESTION ("คุณหมายถึง...หรือไม่", Slice 2) -- only
+        # attempted when ordinary trade-name retrieval found NOTHING AT ALL
+        # (an empty result, not a tie -- a tie already has its own, separate
+        # no-auto-pick handling above). Never auto-confirmable: a
+        # spelling-corrected guess is fundamentally less certain than a
+        # literal token match, so it must always be reviewed by a human,
+        # regardless of how confident the correction looks.
+        spelling_suggestion_candidates: list[tuple[dict, str]] = []
+        spelling_corrections: dict[str, str] = {}
+        if selected is None and not quarantined and not trade_name_candidates:
+            spelling_suggestion_candidates, spelling_tie, spelling_corrections = self._spelling_suggestion_candidates(
+                document, source_attrs, normalized, description_normalized
+            )
+            if spelling_suggestion_candidates and not spelling_tie:
+                selected = spelling_suggestion_candidates[0][0]
+                unique = len(spelling_suggestion_candidates) == 1
+                correction_note = ";".join(f"{original}->{fix}" for original, fix in sorted(spelling_corrections.items()))
+                tier, method, reasons = (
+                    "SPELLING_SUGGESTION",
+                    "did_you_mean_spelling_suggestion",
+                    [
+                        f"DID_YOU_MEAN:{correction_note}",
+                        "SPELLING_SUGGESTION_UNIQUE_HUMAN_REQUIRED" if unique else "SPELLING_SUGGESTION_MULTIPLE_CANDIDATES_HUMAN_REQUIRED",
+                    ],
+                )
+            elif spelling_suggestion_candidates and spelling_tie:
+                tier, method, reasons = "UNRESOLVED", "unresolved_human", ["SPELLING_SUGGESTION_AMBIGUOUS_TIE_NO_AUTO_PICK"]
 
         history_codes = {row["product_code"]: row for row in self.cache.purchase_history(document["supplier_code"])}
 
@@ -661,14 +928,54 @@ class ProductMatcher:
                 }
                 for product, score in trade_name_candidates
             ]
+        elif spelling_suggestion_candidates:
+            # "did you mean" candidates -- reusing trade-name-style scores
+            # but these are ALWAYS review-required, never auto-confirmed
+            # (see SPELLING_SUGGESTION above); surfacing them beats falling
+            # through to the whole-catalog SequenceMatcher sweep, which
+            # tends to score poorly against a short, distinctive-but-
+            # misspelled token buried inside a long full product name.
+            candidates = [
+                {
+                    "product_code": product["product_code"],
+                    "name": product["name"],
+                    "score": score,
+                    "purchase_count": history_codes.get(product["product_code"], {}).get("purchase_count", 0),
+                }
+                for product, score in spelling_suggestion_candidates
+            ]
         else:
             products = self.cache.list_products()
             for product in products:
-                score = SequenceMatcher(None, description_normalized, product["normalized_name"]).ratio()
+                # Bilingual fuzzy fallback (Slice 2): score against BOTH
+                # normalized_name_thai and normalized_name_eng independently
+                # and take whichever language is the closer match -- never
+                # the COALESCE-collapsed legacy `normalized_name` alone,
+                # which would silently prefer whichever language a reviewer
+                # happened to enter first.
+                score_eng = SequenceMatcher(None, description_normalized, product.get("normalized_name_eng") or "").ratio()
+                score_thai = SequenceMatcher(None, description_normalized, product.get("normalized_name_thai") or "").ratio()
+                score = max(score_eng, score_thai)
                 if product["product_code"] in history_codes:
                     score = min(1.0, score + 0.05)
-                if score >= 0.45:
-                    candidates.append({"product_code": product["product_code"], "name": product["name"], "score": f"{score:.4f}", "purchase_count": history_codes.get(product["product_code"], {}).get("purchase_count", 0)})
+                if score < 0.45:
+                    continue
+                # Slice 2: the whole-catalog fuzzy fallback previously never
+                # ran the strength/pack/dosage-form contradiction guard at
+                # all (only _trade_name_candidates did) -- a real 6,665-
+                # product Phase E rerun caught this proposing a 3x3 INCH
+                # wound dressing for a line that explicitly said "10x20cm"
+                # (see docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22 Phase E
+                # evidence). A candidate whose stated attributes actively
+                # contradict the source line's stated attributes must never
+                # be offered, in ANY tier -- this was already true for
+                # trade-name retrieval and is now true here too.
+                candidate_text = " ".join(
+                    filter(None, [product.get("name_thai"), product.get("name_eng"), product.get("strength") or "", product.get("size") or ""])
+                )
+                if attributes_conflict(source_attrs, extract_attributes(candidate_text)):
+                    continue
+                candidates.append({"product_code": product["product_code"], "name": product["name"], "score": f"{score:.4f}", "purchase_count": history_codes.get(product["product_code"], {}).get("purchase_count", 0)})
             candidates.sort(key=lambda item: (-float(item["score"]), item["product_code"]))
             candidates = candidates[:5]
 
@@ -687,7 +994,7 @@ class ProductMatcher:
             # small fixture the two would coincidentally line up; against
             # the real ~6,700-product master they routinely do not without
             # this guarantee.
-            selected_score = "1.0000" if tier in {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS", "EXACT_NAME"} else None
+            selected_score = "1.0000" if tier in {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS", "SPELLING_ALIAS", "EXACT_NAME"} else None
             selected_entry = next((c for c in candidates if c["product_code"] == selected["product_code"]), None)
             if selected_entry is None:
                 selected_entry = {
@@ -754,7 +1061,7 @@ class ProductMatcher:
             "input_hash": hashlib.sha256(canonical_json(input_payload).encode("utf-8")).hexdigest(),
             "proposed_product_code": selected["product_code"] if selected else None, "proposed_unit_code": unit_code,
             "confidence": candidates[0]["score"] if candidates else None, "candidate_set": candidates, "reason_codes": reasons,
-            "provenance": {"tier": tier, "method": method, "master_only": True, "human_confirmation_required": tier not in {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS"}},
+            "provenance": {"tier": tier, "method": method, "master_only": True, "human_confirmation_required": tier not in {"EXACT_CODE", "EXACT_BARCODE", "ACTIVE_ALIAS", "SPELLING_ALIAS"}},
             "evidence": {"line_evidence": line.get("evidence_json"), "supplier_code": document["supplier_code"]},
             "ocr_engine_versions": ocr_versions, "ruleset_version": self.RULESET_VERSION,
         }

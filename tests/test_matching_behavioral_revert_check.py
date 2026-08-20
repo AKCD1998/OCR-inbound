@@ -33,6 +33,14 @@ class _NoAliasRepository:
     def list_aliases(self, supplier_code):
         return []
 
+    # Slice 2 (docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 22): the current
+    # matcher also calls list_name_aliases() unconditionally. Harmless no-op
+    # against the pre-Slice-2 matcher (which never calls it), required
+    # against the current one -- keeps this file importable and runnable
+    # against both, per this file's whole purpose (see module docstring).
+    def list_name_aliases(self):
+        return []
+
 
 def _product(code, name, *, barcode=None, ingredient="", strength="", size="", units=None):
     return {
