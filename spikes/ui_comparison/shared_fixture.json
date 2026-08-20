@@ -1,0 +1,17 @@
+{
+  "fixture_version": "ui-spike.v1",
+  "supplier": "บริษัท วุฒิ อินเตอร์ดรักส์ 2010 จำกัด",
+  "invoice_number": "SPIKE-TH-0120",
+  "line_count": 120,
+  "evidence_image": "evidence_invoice.svg",
+  "line_template": {
+    "supplier_sku_prefix": "630",
+    "description": "ยาพาราเซตามอล 500 มก. กล่องทดสอบ",
+    "ada_product_name": "PARACETAMOL 500 MG",
+    "unit": "BOX",
+    "quantity": "12",
+    "unit_price": "35.50",
+    "line_total": "426.00",
+    "status": "ต้องตรวจ"
+  }
+}

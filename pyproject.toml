@@ -1,0 +1,12 @@
+[project]
+name = "ocr-inbound-staging"
+version = "0.1.0"
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[tool.ocr-inbound]
+ui = "local-web"
+environment = "staging"
+live_ada_default = false
+live_adacc_default = false
+production_save_default = false

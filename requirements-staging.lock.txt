@@ -1,0 +1,4 @@
+# OCR Inbound staging companion runtime lock
+# Python: CPython 3.11.x on Windows
+# Third-party packages: none (standard-library runtime and build only)
+# Existing OCR Layers A-E remain governed by requirements.txt and their external toolchain.

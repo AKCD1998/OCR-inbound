@@ -31,6 +31,81 @@ def _find_selected_pages_run_dir() -> Optional[Path]:
 
 SOURCE_PAGE_LABELS = ["13", "14", "15", "16", "19", "23", "29", "30", "31", "48", "49", "52", "71"]
 
+import re as _re
+from collections import defaultdict as _defaultdict
+
+def _fix_thai(text: str) -> str:
+    return _re.sub(r'(?<=[฀-๿]) (?=[฀-๿])', '', text)
+
+def _read_tsv_pieces(tsv_path, page_w: int = 1966, page_h: int = 2787):
+    """Parse TSV and return merged line pieces with (text, left_pct, top_pct)."""
+    words = []
+    try:
+        with open(tsv_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 12:
+                    continue
+                level, _, block_num, par_num, line_num, _, left, top, _, _, conf, text = parts
+                if level != "5":
+                    continue
+                try:
+                    conf_f = float(conf)
+                    left_i = int(left)
+                    top_i  = int(top)
+                    key    = (int(block_num), int(par_num), int(line_num))
+                except ValueError:
+                    continue
+                text = text.strip()
+                if conf_f < 0 or not text:
+                    continue
+                words.append({"t": text, "left": left_i, "top": top_i, "key": key})
+    except OSError:
+        return []
+
+    line_groups: dict = _defaultdict(list)
+    for w in words:
+        line_groups[w["key"]].append(w)
+
+    pieces = []
+    for ws in line_groups.values():
+        ws.sort(key=lambda w: w["left"])
+        merged = _fix_thai(" ".join(w["t"] for w in ws))
+        left = ws[0]["left"]
+        top = sum(w["top"] for w in ws) / len(ws)
+        pieces.append({
+            "text": merged,
+            "left_pct": left / page_w * 100,
+            "top_pct": top / page_h * 100,
+        })
+    return pieces
+
+
+def _reconstruct_tess_layout(tsv_path) -> str:
+    """Plain text fallback — joined lines in reading order."""
+    pieces = _read_tsv_pieces(tsv_path)
+    pieces.sort(key=lambda p: p["top_pct"])
+    return "\n".join(p["text"] for p in pieces)
+
+
+def _reconstruct_tess_html(tsv_path) -> str:
+    """Positioned HTML: each Tesseract line placed at its % position on a virtual A4 page."""
+    pieces = _read_tsv_pieces(tsv_path)
+    if not pieces:
+        return ""
+    spans = []
+    for p in pieces:
+        safe = (p["text"].replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
+        spans.append(
+            f'<span style="position:absolute;left:{p["left_pct"]:.2f}%;'
+            f'top:{p["top_pct"]:.2f}%;white-space:nowrap;">{safe}</span>'
+        )
+    return (
+        '<div style="position:relative;padding-top:141.8%;pointer-events:none;">'
+        + "".join(spans) + "</div>"
+    )
+
 
 def _stages_data_for_page(run_dir: Path, page_number: int) -> Dict[str, Any]:
     """Return all engine outputs for one page as a dict."""
@@ -69,10 +144,10 @@ def _stages_data_for_page(run_dir: Path, page_number: int) -> Dict[str, Any]:
     tess_text = ""
     tess_conf = None
     if best_path:
-        txt_path = best_path.with_suffix(".stdout.txt")
-        tess_text = txt_path.read_text(encoding="utf-8", errors="replace").strip() if txt_path.exists() else ""
+        tess_text = _reconstruct_tess_layout(best_path)
+        tess_html = _reconstruct_tess_html(best_path)
         tess_conf = round(best_score / 100, 4) if best_score is not None else None
-    result["tesseract"] = {"text": tess_text, "confidence": tess_conf, "variants": variants, "available": best_path is not None}
+    result["tesseract"] = {"text": tess_text, "html": tess_html, "confidence": tess_conf, "variants": variants, "available": best_path is not None}
 
     # EasyOCR
     easy_json = run_dir / "ocr" / "easyocr" / f"page-{page_number:04d}.json"
@@ -170,9 +245,11 @@ body{font-family:system-ui,sans-serif;background:#0f1117;color:#e0e0e0;height:10
 #img-sec{background:#1a1d2e;border-radius:8px;padding:10px 14px}
 #img-sec h2{font-size:.78rem;color:#5a6080;margin-bottom:8px}
 #page-img{max-width:100%;max-height:360px;object-fit:contain;display:block;margin:0 auto;border-radius:4px;background:#0a0c14}
-#eng-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+#eng-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;align-items:start}
 .ec{background:#1a1d2e;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;min-height:300px}
+.ec.tess-primary{min-height:560px}
 .ec.tess{border-top:3px solid #5b7ffa}
+.ec.tess-primary{border-top:3px solid #5b7ffa}
 .ec.paddle{border-top:3px solid #ff7043}
 .ec.easy{border-top:3px solid #4caf50}
 .ec.fusion{border-top:3px solid #ab47bc}
@@ -188,6 +265,7 @@ body{font-family:system-ui,sans-serif;background:#0f1117;color:#e0e0e0;height:10
 .es{font-size:.72rem;color:#5a6080}
 .es.ok{color:#4caf50}
 .et{flex:1;font-family:'Courier New',monospace;font-size:.73rem;line-height:1.55;white-space:pre-wrap;word-break:break-word;background:#0f1117;border:1px solid #2a2d3e;border-radius:4px;padding:8px;overflow-y:auto;max-height:220px;color:#c8d0e8}
+.ec.tess-primary .et{max-height:560px;font-size:.6rem;padding:0;overflow-y:auto;overflow-x:hidden;white-space:normal;word-break:normal}
 .et.empty{color:#3a3d50;font-style:italic}
 .emeta{font-size:.69rem;color:#5a6080}
 #loading{display:flex;align-items:center;justify-content:center;flex:1;color:#5a6080;font-size:.9rem}
@@ -208,7 +286,7 @@ const SRC = ["13","14","15","16","19","23","29","30","31","48","49","52","71"];
 const N = 13;
 let cur = 1, pgStatus = {}, timer = null;
 const ENG = [
-  {key:"tesseract", label:"Tesseract",  cls:"tess",   color:"#5b7ffa"},
+  {key:"tesseract", label:"Tesseract",  cls:"tess-primary",   color:"#5b7ffa"},
   {key:"paddleocr", label:"PaddleOCR",  cls:"paddle", color:"#ff7043"},
   {key:"easyocr",   label:"EasyOCR",    cls:"easy",   color:"#4caf50"},
   {key:"fusion",    label:"Fusion",     cls:"fusion", color:"#ab47bc"},
@@ -254,7 +332,11 @@ function engCard(eng, d){
   <div class="em">${badge(d.confidence)}${metaSpan(eng,d)}</div></div>
   <div class="eb">
     <div class="es ${statcls}">${stat}</div>
-    <div class="et ${!txt?'empty':''}">${txt?esc(txt):(av?"(nothing extracted)":"waiting…")}</div>
+    <div class="et ${!txt?'empty':''}">${
+      eng.key==='tesseract'&&d.html
+        ? d.html
+        : (txt?esc(txt):(av?"(nothing extracted)":"waiting…"))
+    }</div>
   </div></div>`;
 }
 

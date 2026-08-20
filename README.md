@@ -4,6 +4,53 @@ Raw-output-first OCR feasibility pipeline for Thai/English pharmacy and supplier
 
 The pipeline is designed to discover maximum extractable information, not to clean, correct, infer, or normalize OCR output.
 
+## OCR Inbound staging application
+
+The repository also contains a Windows, loopback-only staging companion for importing a source
+PDF/image plus a reviewed `ocr-inbound-artifact.v1`, reviewing header and product lines, persisting
+Layer F predictions and labeled decisions, exact validation, and Fake/Replay ADA simulation. It is
+staging-only: live ADA, live AdaAcc, and production Save/Approve are disabled.
+
+Prerequisite: the repository `.venv` must use Python 3.11. The companion itself and its packaged
+runtime use only the Python standard library; existing OCR Layers A–E keep their separate legacy
+dependencies in `requirements.txt`.
+
+Launch from source with a named staging reviewer:
+
+```powershell
+.\run_staging.ps1 -Reviewer "firstname.lastname"
+```
+
+The browser opens `http://127.0.0.1:8876`. In Inbox, select the original PDF/image and its reviewed
+versioned OCR artifact. The source is content-sniffed, checksummed, and stored immutably; predictions
+are committed before the workspace returns them. A non-browser import is also available:
+
+```powershell
+$env:PYTHONPATH = ".\src"
+.\.venv\Scripts\python.exe -m ocr_inbound --reviewer "firstname.lastname" import `
+  --source .\invoice.pdf --artifact .\invoice.ocr-inbound-artifact.v1.json
+```
+
+Build and smoke-test the self-contained staging zipapp:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\build_staging.py
+.\.venv\Scripts\python.exe .\scripts\package_smoke.py
+.\.venv\Scripts\python.exe .\dist\ocr-inbound-staging.pyz --reviewer "firstname.lastname" serve
+```
+
+Run all automated checks:
+
+```powershell
+$env:PYTHONPATH = ".\src"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
+```
+
+Operational procedures, recovery behavior, data locations, and safety boundaries are in
+[`docs/STAGING_RUNBOOK.md`](docs/STAGING_RUNBOOK.md). Implementation evidence and limitations are in
+[`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) and
+[`docs/EXTERNAL_BLOCKERS.md`](docs/EXTERNAL_BLOCKERS.md).
+
 ## Install
 
 Use Python 3.10 or 3.11. Python 3.7 will not work with the modern OCR/PDF packages used here.

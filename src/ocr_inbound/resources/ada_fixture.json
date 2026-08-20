@@ -1,0 +1,10 @@
+{
+  "fixture_version":"ada-reference-fixture.v1",
+  "suppliers":[{"supplier_code":"WOOTHI","name":"บริษัท วุฒิ อินเตอร์ดรักส์ 2010 จำกัด"},{"supplier_code":"CHAROON","name":"บริษัท เจริญเภสัช จำกัด"},{"supplier_code":"BERLIN","name":"บริษัท เบอร์ลินฟาร์มาซูติคอลอินดัสตรี้ จำกัด"}],
+  "products":[
+    {"product_code":"6300001","barcode":"885000000001","name":"ยาพาราเซตามอล 500 มก","normalized_name":"ยาพาราเซตามอล 500 มก","ingredient":"PARACETAMOL","strength":"500 MG","size":"10X10","manufacturer":"DEMO","units":[{"unit_code":"BOX","factor":"1"}]},
+    {"product_code":"6300002","barcode":"885000000002","name":"วิตามินบีรวม","normalized_name":"วิตามินบีรวม","ingredient":"VITAMIN B COMPLEX","strength":"","size":"100","manufacturer":"DEMO","units":[{"unit_code":"BOX","factor":"1"}]},
+    {"product_code":"6300003","barcode":"885000000003","name":"ยาแก้แพ้ เซทิริซีน 10 มก","normalized_name":"ยาแก้แพ้ เซทิริซีน 10 มก","ingredient":"CETIRIZINE","strength":"10 MG","size":"10","manufacturer":"DEMO","units":[{"unit_code":"BOX","factor":"1"}]}
+  ],
+  "purchase_history":[]
+}

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200">
+  <rect width="900" height="1200" fill="#fffdf7"/>
+  <rect x="40" y="40" width="820" height="1120" rx="8" fill="none" stroke="#536171" stroke-width="3"/>
+  <text x="70" y="100" font-family="Tahoma, sans-serif" font-size="32" fill="#16202a">ใบกำกับสินค้า — หลักฐาน UI Spike</text>
+  <text x="70" y="150" font-family="Tahoma, sans-serif" font-size="22" fill="#394756">บริษัท วุฒิ อินเตอร์ดรักส์ 2010 จำกัด</text>
+  <text x="70" y="195" font-family="Tahoma, sans-serif" font-size="20" fill="#394756">เลขที่ SPIKE-TH-0120 · วันที่ 22/07/2569</text>
+  <rect x="65" y="235" width="770" height="52" fill="#dbeafe" stroke="#1d4ed8" stroke-width="2"/>
+  <text x="80" y="270" font-family="Tahoma, sans-serif" font-size="20" fill="#17345f">รหัสสินค้า</text>
+  <text x="260" y="270" font-family="Tahoma, sans-serif" font-size="20" fill="#17345f">ชื่อสินค้า</text>
+  <text x="610" y="270" font-family="Tahoma, sans-serif" font-size="20" fill="#17345f">จำนวน</text>
+  <text x="735" y="270" font-family="Tahoma, sans-serif" font-size="20" fill="#17345f">ยอด</text>
+  <g font-family="Tahoma, sans-serif" font-size="18" fill="#1f2937">
+    <text x="80" y="330">6300001</text><text x="260" y="330">ยาพาราเซตามอล 500 มก.</text><text x="635" y="330">12</text><text x="735" y="330">426.00</text>
+    <text x="80" y="385">6300002</text><text x="260" y="385">วิตามินบีรวม กล่อง</text><text x="635" y="385">6</text><text x="735" y="385">390.00</text>
+    <text x="80" y="440">6300003</text><text x="260" y="440">ยาแก้แพ้ 10 มก.</text><text x="635" y="440">10</text><text x="735" y="440">550.00</text>
+  </g>
+  <rect x="248" y="294" width="330" height="58" fill="none" stroke="#dc2626" stroke-width="4"/>
+  <text x="70" y="1110" font-family="Tahoma, sans-serif" font-size="18" fill="#6b7280">Synthetic non-production evidence used only for the comparative UI workload.</text>
+</svg>

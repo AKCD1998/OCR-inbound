@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OCR Inbound Local-Web Spike</title>
+  <link rel="stylesheet" href="spike.css">
+</head>
+<body>
+  <header><h1>ตรวจรับเอกสาร — Local Web Spike</h1><span class="badge">STAGING</span><output id="metrics"></output></header>
+  <main>
+    <section class="evidence"><img src="../evidence_invoice.svg" alt="ภาพต้นฉบับสำหรับหลักฐาน"><p>ภาพหลักฐาน · zoom ด้วย Ctrl + / Ctrl -</p></section>
+    <section class="workspace">
+      <div class="toolbar"><button id="previous">ก่อนหน้า</button><button id="confirm">ยืนยันแถว (Ctrl+Enter)</button><button id="next">ปัญหาถัดไป (F8)</button></div>
+      <div id="grid" class="grid" role="grid" aria-label="รายการสินค้า 120 แถว" tabindex="0">
+        <div class="grid-header" role="row"><span>ลำดับ</span><span>รหัส</span><span>ชื่อสินค้า</span><span>หน่วย</span><span>จำนวน</span><span>ราคา</span><span>ยอด</span><span>สถานะ</span></div>
+        <div id="viewport" class="viewport"><div id="spacer"></div><div id="rows"></div></div>
+      </div>
+      <aside id="status" aria-live="polite">ใช้ลูกศรขึ้น/ลง, Enter, Ctrl+Enter และ F8</aside>
+    </section>
+  </main>
+  <script src="spike.js"></script>
+</body>
+</html>

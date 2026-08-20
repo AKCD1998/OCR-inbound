@@ -21,6 +21,15 @@ ocr_viewer_data.json
 *.log
 *.err.log
 
+# OCR Inbound app generated state/builds
+environments/*/ocr_inbound_app/
+dist/
+build/
+*.pyz
+*.db-wal
+*.db-shm
+spikes/ui_comparison/*_evidence_*.png
+
 # Input PDFs (sensitive documents)
 *.pdf
 

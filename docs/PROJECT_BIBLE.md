@@ -2,7 +2,7 @@
 
 **Status:** Authoritative. This is the constitution of the project.
 **Created:** 2026-06-10
-**Last amended:** 2026-06-10
+**Last amended:** 2026-07-22
 **Current stage:** Stage 1 → Stage 2 transition (see §4)
 
 > **Instruction to every future Claude session and every human contributor:**
@@ -289,6 +289,32 @@ these five are complete.**
 First five schema objects (and only these): `erp_ground_truth`,
 `document_links` + `line_links`, `supplier_product_aliases`,
 `layer_f_predictions`, `review_events`.
+
+### 9.1 Authorized staging operational companion (2026-07-22)
+
+The owner authorized a staging-only operational companion so the application can capture
+review events and exercise a safe ADA workflow while the first-five learning priority remains
+in force. This is a narrow implementation authorization, not a stage advance or evidence that
+the first-five milestone has passed.
+
+- Keep the current stage as **Stage 1 → Stage 2 transition** and retain the priority order above.
+- Use the naming **5 conceptual schema groups / 6 physical learning-plane tables**;
+  `document_links` and `line_links` are two physical tables in one alignment group.
+- Operational tables may wrap, but must not rename, replace, or overwrite,
+  `erp_ground_truth`, `document_links`, `line_links`, `supplier_product_aliases`,
+  `layer_f_predictions`, or `review_events`.
+- The authorized MVP topology is one Windows workstation per ADA instance with a local SQLite
+  single-writer store. A shared queue or multi-workstation topology requires a new architecture
+  review.
+- Every review and save authorization requires a unique application actor. Staging may use an
+  explicit named reviewer profile labelled **not production authentication**; production remains
+  blocked pending an owner/IT identity decision.
+- This authorization is for a staging-ready MVP only. Live ADA/AdaAcc capabilities without
+  repeatable proof remain disabled; direct AdaAcc writes and ADA production Save/Approve are
+  forbidden.
+
+**Amendment reason:** owner decision block in `docs/SOL_LIGHT_ONE_GOAL_BUILD_PROMPT_TH.md`,
+submitted 2026-07-22, resolves C-001/C-003/C-006/C-007 only within this staging goal.
 
 ### Existing system facts (do not rediscover)
 

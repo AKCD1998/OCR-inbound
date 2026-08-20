@@ -1,0 +1,14 @@
+{
+  "contract_version":"ocr-inbound-artifact.v1","ocr_run_id":"golden-berlin-v1","ocr_engine_versions":{"layers_a_e":"existing-replay-v1","tesseract":"fixture","paddle":"fixture","easyocr":"fixture"},
+  "header":{"fields":{
+    "supplier_code":{"value":"BERLIN","raw_text":"บริษัท เบอร์ลินฟาร์มาซูติคอลอินดัสตรี้ จำกัด","required":true,"confidence":"0.99","source_prediction_ref":"golden-berlin:header:supplier","evidence":{"page":1,"bbox":[0.05,0.03,0.8,0.1]}},
+    "invoice_number":{"value":"BER-2026-0001","raw_text":"BER-2026-0001","required":true,"confidence":"0.98","source_prediction_ref":"golden-berlin:header:invoice","evidence":{"page":1,"bbox":[0.05,0.1,0.4,0.15]}},
+    "invoice_date":{"value":"2026-07-22","raw_text":"22/07/2569","required":true,"confidence":"0.97","source_prediction_ref":"golden-berlin:header:date","evidence":{"page":1,"bbox":[0.4,0.1,0.6,0.15]}},
+    "grand_total_minor":{"value":42500,"raw_text":"425.00","required":true,"confidence":"0.99","source_prediction_ref":"golden-berlin:header:total","evidence":{"page":1,"bbox":[0.7,0.8,0.95,0.9]}}
+  }},
+  "lines":[
+    {"source_row_ref":"ber:r1","raw_ocr_text":"6300001 ยาพาราเซตามอล 500 มก","supplier_sku":"6300001","description":"ยาพาราเซตามอล 500 มก","unit":"BOX","quantity":"2","unit_price_minor":10000,"line_total_minor":20000,"evidence":{"page":1,"bbox":[0.05,0.16,0.95,0.21]}},
+    {"source_row_ref":"ber:r2","raw_ocr_text":"6300003 วิตามินบีรวม","supplier_sku":"6300003","description":"วิตามินบีรวม","unit":"BOX","quantity":"2","unit_price_minor":5000,"line_total_minor":15000,"evidence":{"page":1,"bbox":[0.05,0.21,0.95,0.26]}},
+    {"source_row_ref":"ber:r3","raw_ocr_text":"ยาแก้แพ้ เซทิริซีน 10 มก","supplier_sku":"","description":"ยาแก้แพ้ เซทิริซีน 10 มก","unit":"BOX","quantity":"1","unit_price_minor":7500,"line_total_minor":7500,"evidence":{"page":1,"bbox":[0.05,0.26,0.95,0.31]}}
+  ]
+}
