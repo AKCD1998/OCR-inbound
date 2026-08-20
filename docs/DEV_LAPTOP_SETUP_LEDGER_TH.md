@@ -764,3 +764,508 @@ Accepted residuals: worst-case bilingual/spelling performance remains staging-on
 Seal only the intentional cumulative Slice-2 manifest by exact path: `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md`, `src/ocr_inbound/text_normalize.py`, `src/ocr_inbound/ada_read.py`, `src/ocr_inbound/db.py`, `src/ocr_inbound/migrations/0002_product_name_aliases.sql`, `src/ocr_inbound/matching.py`, `tests/test_matching.py`, `tests/test_matching_behavioral_revert_check.py`, and `tests/test_matching_integration.py`. Do not use `git add -A`; exclude `.playwright-cli/`, `environments/`, `docs/HANDOFF_SLICE2_TO_NEXT_SESSION_TH.md`, OCR run outputs, source documents, models, and credentials. Parent must remain `6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`; local commit only; do not begin Slice 3 without separate instruction.
 
 Codex changed no production source, made no commit/push/deploy, and accessed no production/shared DB during this re-adjudication.
+
+---
+
+## 26. Senior Developer — Layer F Slice 3 Admin Product Matching Review candidate (2026-08-20)
+
+**สถานะ: CANDIDATE — awaiting Codex Tech Lead adjudication; ยังไม่ seal/commit/push และไม่เริ่ม slice ถัดไป**
+
+Base `5d4160e083a7cbae88cf3b2fb30b7c723b646716` parent `6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`.
+Preflight 138/138 และ safety scan ผ่าน. Slice 3 เพิ่ม local/staging Admin Review boundary: migration 0003
+เก็บ append-only decision receipt + unique request id; queue refuse display ถ้า prediction ยังไม่ persist;
+named admin + CSRF gate; protected source token + root containment; active-master grounding; raw OCR/evidence
+เก็บ hash immutable; confirm/correct สร้าง supplier alias observation แต่หนึ่ง document ยังเป็น CANDIDATE;
+UNREADABLE/NOT_IN_MASTER/DEFER ไม่แตะ stock/ERP/ADA.
+
+UX เรียนจาก Category Review เฉพาะ card queue/search/status/rationale: desktop 3-pane แสดง source invoice,
+OCR/SKU แยก, persisted tier/confidence/ruleset, candidates พร้อมชื่อไทย/อังกฤษ code/barcode/strength/pack/unit
+และ reason; มี candidate buttons, master search, reason, unreadable, missing-master, defer. Render จริงที่
+localhost:8893 ด้วย woothi SVG ยืนยัน source/candidates/layer-f-v6 และ responsive panel ไม่พัง.
+
+Authorization: unauthenticated/non-admin เข้า admin API ไม่ได้; GET queue ต้อง named admin; decision และ
+alias activation ต้อง named admin + CSRF; production bootstrap ยัง blocked. Alias lifecycle reuse
+`supplier_product_aliases`: CANDIDATE → 3 distinct docs ELIGIBLE → explicit admin approve ACTIVE;
+conflicts reuse QUARANTINED rule.
+
+Tests: เพิ่ม `tests/test_product_review.py` 7 tests ครอบ persist-before-display, queue DTO/master,
+idempotency, one-document non-activation, forged product, required reason/raw immutability, root confinement,
+admin/CSRF. Full discovery **145/145** ผ่าน 36.567s; safety scan, JS syntax และ `git diff --check` ผ่าน.
+Non-vacuous revert: ปิด existing-request return ชั่วคราว ทำให้ idempotency test ERROR จริงด้วย SQLite
+UNIQUE constraint; คืนโค้ดแล้ว suite ผ่าน.
+
+Slice-3 manifest: `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md`, `src/ocr_inbound/__main__.py`,
+`src/ocr_inbound/db.py`, `src/ocr_inbound/service.py`, `src/ocr_inbound/web.py`,
+`src/ocr_inbound/product_review.py`, `src/ocr_inbound/migrations/0003_product_review.sql`,
+`src/ocr_inbound/web_static/index.html`, `src/ocr_inbound/web_static/app.js`,
+`src/ocr_inbound/web_static/app.css`, `tests/test_product_review.py`,
+`tests/test_matching_integration.py` (schema-version compatibility only).
+
+Residuals/สิ่งที่ Codex ควรหักล้าง: staging auth เป็น explicit local profile ไม่ใช่ production auth;
+token อยู่ใน process memory; crop ปัจจุบันแสดง source document เต็มเพราะ fixture evidence ไม่มี crop artifact;
+Product Master search input ยังเป็น presentational ไม่มี server-side search endpoint; batch summary/back และ
+keyboard 1–5 ยังไม่ wired ครบ; decision receipt แยกจาก legacy `review_events` เพื่อรองรับ defer/reject
+แต่ Tech Lead ควรตัดสินว่าต้อง dual-write review_events ใน Slice 3 หรือไม่; ทดสอบ symlink escape บน Windows
+ยังไม่มี explicit probe (root traversal มีแล้ว); admin activation HTTP test ยังไม่ครอบ full 3-document flow.
+
+ไม่มี production/shared DB mutation, stock/ERP/ADA write, push/PR/deploy หรือ OCR engine rerun. UI verification
+ใช้ local fixture และ Fake driver เท่านั้น. หยุดรอ Codex Tech Lead ตรวจ.
+
+---
+
+## 27. Codex independent adjudication of Layer F Slice 3 candidate (2026-08-20)
+
+**Verdict: BLOCKED — โครงหน้า review และ staging boundary มีทิศทางที่ดี แต่ decision path ปัจจุบันยังไม่ใช่
+human review source of truth และมี correctness/security defects ที่ห้าม seal.**
+
+Codex ยืนยัน base `5d4160e083a7cbae88cf3b2fb30b7c723b646716`, rerun full discovery **145/145**,
+`safety_scan.py`, JavaScript syntax และ `git diff --check` ผ่าน. ตรวจ source/architecture และทำ real-SQLite
+probes แยกจาก test suite แล้วพบ release blockers ดังนี้:
+
+1. **CONFIRM/CORRECT ไม่ได้ confirm/correct line จริง.** `ProductReviewService.decide()` เขียนเฉพาะ
+   `product_review_decisions` และ alias observation; ไม่เขียน current `document_lines`, ไม่สร้าง
+   `review_events`, ไม่ bump revision/invalidate Ready state. Probe จริงหลัง CONFIRM ได้
+   `review_status=UNREVIEWED`, `match_status=PROPOSED`, `review_events=0`. จึงขัดกับ Project Bible
+   และ Architecture §9.3 ที่กำหนด current value + `review_events` + audit/revision ใน transaction เดียว
+   และทำให้ปุ่ม Ready ยังเห็นรายการเป็น unreviewed. ตาราง receipt ใหม่อาจเป็น wrapper สำหรับ action เพิ่มเติม
+   ได้ แต่ห้ามแทนที่ learning-plane `review_events`.
+2. **Idempotency key ไม่ผูกกับ request payload และยังมี side effect หลังคืน receipt เดิม.** ส่ง request id
+   เดิมครั้งแรกเลือก product A แล้ว retry id เดิมพร้อม product B: API คืน receipt ของ A แต่โค้ดยังบันทึก alias
+   ของ B. Probe จริงทำให้ alias A และ B สำหรับข้อความเดียวกันถูกสร้างและ QUARANTINED. ต้องตรวจ canonical
+   request fingerprint; replay ที่ payload เดิมต้องไม่มี side effect เพิ่ม, payload ต่างกันต้อง fail ด้วย stable
+   conflict code. Receipt/current state/review event/audit ต้อง atomic; alias learning ควรเกิดจาก committed label
+   ที่ authoritative เท่านั้น.
+3. **คำว่า append-only ยังไม่จริงที่ฐานข้อมูล.** `product_review_decisions` ไม่มี UPDATE/DELETE rejection
+   triggers แบบ `review_events`; probe ตรงสามารถ `UPDATE ... SET action='DEFER'` ได้สำเร็จ. เพิ่ม database
+   triggers และ tests ทั้ง UPDATE/DELETE ก่อนอ้าง immutable decision receipt.
+4. **เอกสาร SVG ที่ upload ได้สามารถรัน script ใน admin origin.** Artifact store ยอมรับ
+   `image/svg+xml`, `/api/source` serve inline และ UI ฝังใน `<iframe>` ที่ไม่มี sandbox/CSP. เอกสารที่ไม่ไว้ใจ
+   จึงอาจอ่าน parent page/CSRF token และเรียก admin endpoint ได้. ต้อง neutralize SVG (เช่น rasterize เป็น
+   non-script image สำหรับ review) หรือ serve จาก isolated origin/strict sandbox ที่พิสูจน์ด้วย malicious-SVG
+   integration test; header/token hardening ต้องไม่ทำให้ PDF/image review พัง.
+5. **Correction workflow ที่ผู้ใช้ขอยังทำไม่จบ.** Product Master search เป็น input ที่ไม่มี event/backend
+   endpoint, candidate button ทุกปุ่มส่ง `CONFIRM` เท่านั้น จึงไม่มี UI path เลือกสินค้านอก top candidates แล้ว
+   ส่ง `CORRECT`; หลัง submit queue ไม่ตัดรายการที่ตัดสินแล้วออก. Keyboard candidate 1–5/back และ batch
+   summary ยังไม่ครบ. อย่างน้อย search→select→reason/error category→CORRECT และ reload/resume state ต้อง
+   ทำงาน end-to-end ก่อน Slice 3 ถือว่าใช้งานได้.
+
+ข้อที่ยอมรับ: prediction-before-display, active-master check, loopback-only staging posture, named staging
+profile/CSRF boundary (ไม่ใช่ production auth), raw/evidence hashes, ordinary traversal confinement และ
+one-document alias non-activation มีทิศทางถูกต้อง. Explicit Windows symlink probe ยังทำไม่ได้ใน environment
+นี้เพราะ `WinError 1314`; code ใช้ resolved-path containment แต่ยังต้องมี privileged/junction test ตามที่
+candidate เปิดเผย. Admin 3-document HTTP activation flow ยังต้องเพิ่มหลังแก้ atomic decision path.
+
+Visual audit limitation: Codex พยายามเปิด local candidate ที่ `127.0.0.1:8893` แต่ in-app Browser plugin
+มี internal version mismatch (`26.818.21641` client อ้าง service `26.814.41407`) จึงจับ screenshot ใหม่ตาม
+audit contract ไม่ได้; รอบนี้จึงไม่อ้าง visual/accessibility verdict จาก screenshot. Source-level UI findings
+ข้อ 5 เป็น functional findings ไม่ใช่ visual-polish verdict.
+
+Required remediation: tests first; ทำ authoritative atomic decision transaction, payload-bound idempotency,
+DB-enforced append-only receipts, malicious-SVG isolation, server-side Product Master search + real CORRECT
+flow, decided-queue state และ keyboard/batch acceptance ที่ตกค้าง. เพิ่ม real HTTP matrix รวม three distinct
+documents → ELIGIBLE → explicit activation, targeted non-vacuous revert checks, full suite/safety scan และ
+rendered-flow verification ใหม่. Append ledger section ใหม่โดยไม่แก้ §26/§27. **ห้าม seal/commit และห้าม
+เริ่ม slice ถัดไป.**
+
+Codex ไม่แก้ production source, ไม่ stage/commit/push/deploy และไม่แตะ production/shared DB ในรอบนี้.
+
+---
+
+## 28. Senior Developer — Slice 3 BLOCKED remediation candidate v2 (2026-08-20)
+
+**สถานะ: REMEDIATED CANDIDATE — awaiting Codex Tech Lead re-adjudication; ห้าม seal/commit/push**
+
+แก้ §27 แบบ tests-first เฉพาะ Slice 3: decision transaction ใหม่ผูก canonical payload fingerprint กับ
+request id และ atomically เขียน immutable receipt + authoritative `review_events` + current line/revision
+invalidation + audit + supplier alias observation. Retry payload เดิมคืน receipt โดยไม่มี side effect;
+payload ต่างใช้ id เดิม fail `IDEMPOTENCY_PAYLOAD_CONFLICT`. CONFIRM ต้องเลือก proposed product;
+สินค้าอื่นบังคับ CORRECT + reason + error category. Queue ซ่อน final decisions แต่ DEFER ยังกลับมาทำต่อได้.
+
+Migration 0003 เพิ่ม UPDATE/DELETE rejection triggers. SVG compatibility คงไว้สำหรับ fixture แต่ source
+response บังคับ CSP `default-src 'none'; script-src 'none'; object-src 'none'; sandbox`, `nosniff` และ
+iframe มี `sandbox` ไม่มี allow-scripts; malicious-SVG integration probe ผ่าน. เพิ่ม admin-only Product Master
+search endpoint และ UI search→เลือกสินค้านอก top candidates→CORRECT, refresh authoritative workspace,
+queue advancement, keyboard 1–5, Alt+Left/back และ batch summary.
+
+Evidence: focused Slice 3 **11/11**, full discovery **149/149** ใน 40.332s, safety scan/JS syntax/
+`git diff --check` ผ่าน. Real HTTP matrix ผ่าน unauth/admin/CSRF, malicious SVG, master search, three distinct
+documents → ELIGIBLE → explicit admin activation → ACTIVE. Targeted revert ปิด authoritative transaction
+branch ชั่วคราวทำให้ regression fail จริง (ไม่มี alias/current state); คืนแล้ว focused ผ่าน. Browser render
+บน fresh local fixture ยืนยัน protected SVG แสดงได้, search `6300002` คืน master product, correction submit
+สำเร็จและ queue advance จาก line 1 ไป line 2. ไม่มี OCR rerun/production/shared DB/stock/ERP/ADA write.
+
+Manifest เหมือน §26. Residuals: batch summary ปัจจุบันเป็น review count confirmation surface ยังไม่ใช่
+multi-select bulk decision; Windows symlink/junction privileged probe ยังทำไม่ได้; staging identity/token ยัง
+ไม่ใช่ production auth ตาม architecture. หยุดรอ Codex Tech Lead ตรวจใหม่.
+
+---
+
+## 29. Codex re-adjudication of Slice 3 remediation candidate v2 (2026-08-20)
+
+**Verdict: BLOCKED — §27 findings หลักได้รับการแก้จริง แต่พบ data-correctness regression และ exception
+workflow gap ใหม่ที่ test 149 ตัวไม่ครอบคลุม.**
+
+Codex ยืนยัน HEAD/base ยังเป็น `5d4160e083a7cbae88cf3b2fb30b7c723b646716`, rerun full discovery
+**149/149**, safety scan, JavaScript syntax และ `git diff --check` ผ่าน. Source/SQLite probes ยืนยันว่า
+payload-bound idempotency, atomic CONFIRM/CORRECT, DB append-only triggers, queue advancement, master search
+และ CSP/sandbox headers ถูกเพิ่มจริง. อย่างไรก็ตามยังห้าม sealด้วย findings ต่อไปนี้:
+
+1. **Confirm เปลี่ยนหน่วยสินค้าได้โดยผู้ใช้ไม่รู้ตัว.** UI ไม่ส่ง `unit_code`; service fallback เป็น
+   `product.units[0]` แทนที่จะรักษา `prediction.proposed_unit_code`. Real SQLite probe ด้วย product ที่มี
+   `BOX`/`EACH` ได้ prediction=`EACH` แต่ receipt และ persisted line กลายเป็น `BOX` หลัง CONFIRM.
+   CORRECT จาก master search ก็เลือกหน่วยแรกเช่นกันโดยไม่มี unit picker. ต้องให้ CONFIRM pin proposed unit,
+   validate ว่าหน่วย active ของสินค้านั้น และให้ CORRECT แสดง/บังคับเลือกหน่วยเมื่อมีหลายหน่วย. เพิ่ม real
+   persistence + HTTP/UI tests สำหรับ single-unit, multi-unit, forged unit และ missing proposed unit.
+2. **UNREADABLE/NOT_IN_MASTER กลายเป็น state ที่มองไม่เห็น.** หลัง NOT_IN_MASTER probe จริงพบ line ถูกซ่อน
+   จาก product queue แต่ current line ยัง `UNREVIEWED/PROPOSED`, ไม่มี `review_events`, และ workspace ไม่คืน
+   `product_review_decisions`; nav Exceptions/Completed ก็ยังไม่มี handler. ผู้ใช้จึงหาเหตุผล/รายการนั้นเพื่อ
+   แก้ภายหลังไม่ได้ ขณะที่ Ready ยังถูก block ด้วย LINE_UNREVIEWED แบบไม่บอกว่ามนุษย์ตัดสินอะไรไว้.
+   ต้องสร้าง current exception projection/queue ที่อ่าน receipt ได้, แสดง reason/action/actor/time และมี
+   explicit resume/resolve path; DEFER ต้องคง resumable. ห้ามเพียงซ่อน terminal receipt จาก queue หลัก.
+3. **Alias state mutation ขาด alias audit event.** `commit_product_review()` เขียน/เลื่อน/quarantine
+   `supplier_product_aliases` โดยตรง แต่ไม่เขียน `ALIAS_OBSERVED` audit เหมือน repository path เดิม;
+   มีเพียง generic `PRODUCT_REVIEW_DECIDED`. Alias learning ที่อาจเพิ่ม automation ต้อง trace distinct
+   observation/status transition ได้. Reuse transaction-local alias helper หรือเพิ่ม equivalent audit พร้อม
+   rollback test. ลบหรือจำกัด dead `record_product_review_decision()` path ที่ยังสามารถสร้าง non-authoritative
+   receipt เพื่อไม่ให้ถูกเรียกผิดในอนาคต.
+4. **รายงาน “HTTP lifecycle 3 documents” เกินหลักฐานใน test.** Test ชื่อ
+   `test_three_distinct_http_decisions...` import/generate/decide ทั้งสามเอกสารด้วย direct Python method;
+   ใช้ HTTP เฉพาะ activation request สุดท้าย จึงยังไม่ได้พิสูจน์ admin headers, CSRF, serialized payload,
+   response และ idempotency ผ่าน HTTP boundary ตามที่ §27 ขอ. แก้ test ให้ทั้งสาม decisions และ activation
+   วิ่งผ่าน real loopback HTTP; เพิ่ม retry-same/reuse-different payload ที่ boundary เดียวกัน.
+
+Accepted from §28: canonical request fingerprint ปิด alias-poisoning probe เดิม; receipt UPDATE/DELETE ถูก
+trigger block; CONFIRM/CORRECT สร้าง authoritative review event/current projection ใน transaction; search
+endpoint/admin gate และ CORRECT routing มีจริง; CSP `sandbox` + iframe sandbox/no allow-scripts + nosniff
+เป็น source-level mitigation ที่เหมาะกับ staging. Visual screenshot re-audit ยังทำไม่ได้ใน Codex environment
+เพราะ Browser plugin internal version mismatch เดิม จึงไม่อ้าง visual/accessibility verdict เพิ่มจาก Sonnet.
+
+Required remediation: tests first แก้ unit contract, exception/resume projection, alias audit และ full HTTP
+lifecycle; targeted non-vacuous revert checks; rerun full suite/safety/JS/diff และ browser flow. Append ledger
+section ใหม่โดยไม่แก้ §28/§29. **ห้าม seal/commit และห้ามเริ่ม slice ถัดไป.**
+
+Codex ไม่แก้ production source, ไม่ stage/commit/push/deploy และไม่แตะ production/shared DB ในรอบนี้.
+
+---
+
+## 30. Senior Developer (Sonnet) — Slice 3 BLOCKED remediation candidate v3 (2026-08-20)
+
+**สถานะ: REMEDIATED CANDIDATE — awaiting Codex Tech Lead re-adjudication; ห้าม seal/commit/push; ไม่เริ่ม slice ถัดไป**
+
+Base/HEAD ยืนยันแล้วตรงกับ §28/§29: `5d4160e083a7cbae88cf3b2fb30b7c723b646716` (parent
+`6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`) แก้ **เฉพาะ 4 จุดที่ §29 ระบุ** แบบ tests-first ไม่แตะ
+findings อื่นที่ §27/§29 ยอมรับแล้ว ไม่เริ่ม Slice 4
+
+### 1. Unit contract (§29 finding 1)
+
+`ProductReviewService.decide()` เดิม: `unit_code = payload.get("unit_code") or product.units[0].unit_code`
+-- UI ไม่เคยส่ง `unit_code` เลย จึงเท่ากับ "เลือกหน่วยแรกเสมอ" โดยไม่สนใจ `prediction.proposed_unit_code`
+เลย แก้เป็น:
+
+- **CONFIRM** ต้อง pin `prediction["proposed_unit_code"]` เท่านั้น (ไม่รับค่าจาก payload) ถ้าไม่มี
+  proposed unit เลย ให้ `PROPOSED_UNIT_MISSING`; ถ้า proposed unit ไม่อยู่ใน active units ของสินค้า ให้
+  `PROPOSED_UNIT_INVALID`
+- **CORRECT** ถ้าสินค้ามีมากกว่า 1 active unit ต้องระบุ `unit_code` มาชัดเจน ไม่งั้นให้ `UNIT_REQUIRED`;
+  หน่วยที่ระบุต้องอยู่ใน active units จริง ไม่งั้นให้ `UNIT_INVALID` (ปลอมหน่วยไม่ได้เหมือนปลอมสินค้าไม่ได้)
+- UNREADABLE/NOT_IN_MASTER/DEFER ไม่มีสินค้าที่เลือก unit จึงเป็น `None` เสมอ
+
+**บั๊กแฝงที่เจอเพิ่มระหว่างเขียน test:** `decide()` เดิมค้นหา prediction ด้วยการหยิบแถวแรกตามลำดับ
+(เก่าสุด) ที่ตรงกับ line_id ไม่ใช่ current prediction จริง -- ถ้า line มีมากกว่า 1 prediction (เช่น re-run)
+จะได้ prediction เก่าที่ไม่ตรงกับ `line.current_prediction_id` ทำให้ `commit_product_review()`'s staleness
+check โยน `PREDICTION_STALE` แม้ query มาจาก endpoint ปกติ แก้เป็นค้นหาด้วย
+`row["id"]==line["current_prediction_id"]` ตรง ๆ (ใช้ pointer เดียวกับที่ `commit_product_review()` ใช้
+ตรวจ stale)
+
+UI (`app.js`): candidate button ตอนนี้ตรวจจำนวน active unit ของสินค้าที่เลือก ถ้ามีมากกว่า 1 หน่วย
+เปิด unit picker (`<select>`) บังคับเลือกก่อน submit เสมอ (ไม่ปล่อยให้ CORRECT ส่งโดยไม่มี unit_code)
+
+Tests: `ProductReviewUnitContractTests` 6 tests (pin-proposed-unit, reject-missing-proposed-unit,
+correct-requires-explicit-unit-when-multi, correct-rejects-forged-unit, correct-persists-explicit-unit,
+single-unit-still-works-without-explicit-unit)
+
+### 2. Exception queue (§29 finding 2)
+
+`queue()` เดิมใช้ "decided = มี decision ที่ action ไม่ใช่ DEFER อย่างน้อยหนึ่งรายการ" ทำให้ UNREADABLE/
+NOT_IN_MASTER หายจากคิวหลัก**ตลอดไป**ไม่มีทางกลับมาแก้ แก้เป็น "latest decision per line" เสมอ (ทั้ง
+`queue()` และของใหม่ `exceptions()`) และเพิ่ม method+endpoint ใหม่:
+
+- `ProductReviewService.exceptions(document_id)` -- คืน row shape เดียวกับ `queue()` (candidates/prediction
+  เต็ม) บวก `previous_decision` (action/reason/actor_id/created_at) สำหรับทุก line ที่ latest decision
+  เป็น UNREADABLE/NOT_IN_MASTER
+- `GET /api/admin/product-review/exceptions?document_id=` (admin-gated เหมือน queue endpoint)
+- แก้ไข exception ผ่าน `decide()` endpoint **เดิม** (ไม่มี endpoint ใหม่สำหรับ resolve) -- decision ใหม่
+  ใด ๆ ทำให้ line หลุดจาก `exceptions()` โดยอัตโนมัติในการ fetch ครั้งถัดไป (latest decision ไม่ terminal
+  อีกต่อไป)
+- DEFER ยังอยู่ใน main queue เหมือนเดิม (ไม่เข้า exceptions())
+
+UI: nav button "Exceptions" (มีอยู่แล้วใน HTML แต่ไม่เคยถูก wire) ตอนนี้เรียก `loadExceptions()` แสดง
+banner คำเตือนพร้อม reason/actor/time เหนือ candidate list เดียวกัน ใช้ decide flow เดิมได้ทันที ปุ่ม
+"Review Queue" กลับไปโหมดปกติ (ปุ่ม nav อื่น ๆ ที่ dead มาก่อนหน้านี้ -- Inbox/Completed/System Health --
+**ไม่แตะ** เพราะไม่อยู่ใน 4 จุดที่ต้องแก้รอบนี้)
+
+Tests: `ProductReviewExceptionQueueTests` 4 tests (NOT_IN_MASTER hidden+visible-in-exceptions,
+UNREADABLE hidden+visible-in-exceptions, resolve removes from exceptions, DEFER stays in main queue not
+exceptions)
+
+### 3. Alias audit (§29 finding 3)
+
+`commit_product_review()` mutate `supplier_product_aliases` โดยตรง (insert CANDIDATE ใหม่, update
+confirmation count, promote ELIGIBLE, QUARANTINE conflict) แต่ไม่เคยเขียน `ALIAS_OBSERVED` audit เหมือน
+`Repository.record_alias_observation()` เดิม (Slice 1) -- เพิ่ม audit insert ชนิด `ALIAS_OBSERVED` ใน
+บล็อกเดียวกัน ก่อน `PRODUCT_REVIEW_DECIDED` audit เดิม (ยังคงอยู่)
+
+**dead code:** `Repository.record_product_review_decision()` (ไม่มีการเรียกใช้จากที่ไหนเลย ยืนยันด้วย
+`grep -rn` ทั้ง `src/` และ `tests/`) เขียน receipt แบบไม่ authoritative (ไม่มี review_events/current-state/
+alias update) -- **ลบทิ้งทั้งหมด** ตามที่ §29 เสนอ (ไม่ใช่แค่จำกัดสิทธิ์) เพื่อไม่ให้ถูกเรียกผิดในอนาคต
+
+Tests: เพิ่ม `test_confirm_writes_an_alias_observed_audit_event` ใน `ProductReviewTests`
+
+### 4. HTTP lifecycle test honesty (§29 finding 4)
+
+`test_three_distinct_http_decisions_become_eligible_then_explicit_admin_activation` เดิมเรียก
+`self.app.product_review.decide()` ตรง ๆ (Python) สำหรับทั้งสาม CONFIRM แล้วใช้ HTTP แค่ตอน activation
+สุดท้าย เขียนใหม่ทั้งหมด: ทั้งสาม CONFIRM และ activation วิ่งผ่าน `urllib.request` จริงกับ loopback server
+เดียวกัน ผ่าน `_post()` helper ใหม่ที่ส่ง `X-OCR-Actor`/`X-CSRF-Token` header จริง เพิ่ม retry-same-payload
+(ยืนยัน receipt เดิม ไม่มี side effect ซ้ำ) และ reuse-different-payload (ยืนยัน `IDEMPOTENCY_PAYLOAD_CONFLICT`
+ผ่าน HTTP) ที่ boundary เดียวกันตามที่ขอ ยืนยัน `alias["distinct_document_count"]==3` เป๊ะ (ไม่ใช่ 4 ที่จะ
+เกิดถ้า retry มี side effect ซ้ำ)
+
+### Test counts
+
+- `tests/test_product_review.py`: **22/22 ผ่าน** (11 เดิม + 11 ใหม่: 6 unit-contract + 4 exceptions + 1
+  alias-audit)
+- Full discovery: **160/160 ผ่าน** ใน ~43s (149 เดิม + 11 ใหม่)
+- `scripts/safety_scan.py`: ผ่านครบ
+- `node -c src/ocr_inbound/web_static/app.js`: ผ่าน (JS syntax valid)
+- `git diff --check`: ผ่าน (ไม่มี whitespace error, มีแค่ LF/CRLF warning ปกติของ Windows)
+
+### Revert-check (non-vacuous, ทำแยกทีละจุด)
+
+| จุดที่แก้ | วิธี revert ชั่วคราว | ผล |
+|---|---|---|
+| Unit contract | คืน `unit_code = payload.get("unit_code") or product.units[0]...` กลับเข้า `decide()` | **4/6 test fail จริง** (pin-proposed-unit ได้ BOX แทน EACH, missing-proposed-unit ไม่ raise, multi-unit-requires-explicit ไม่ raise, forged-unit ไม่ raise) อีก 2 ข้อผ่านบังเอิญ (single-unit และ explicit-unit-ที่ให้มาตรงกับ fallback อยู่แล้ว) |
+| Exception queue | คืน `queue()`/ลบ `exceptions()`/`_row()`/`_latest_decisions_by_line()` กลับเป็นโค้ดเดิม | **4/4 test fail จริง** (`AttributeError: 'ProductReviewService' object has no attribute 'exceptions'`) |
+| Alias audit | ลบบรรทัด `ALIAS_OBSERVED` audit insert ออกชั่วคราว | **1/1 test fail จริง** (`assertTrue(any(...))` เป็น False) |
+
+คืนไฟล์ที่แก้แล้วกลับเข้าไปหลังทดสอบทุกจุด แล้ว full suite 160/160, safety scan, JS syntax, `git diff --check`
+ผ่านครบเหมือนเดิม (ไม่ได้ทำ revert-check แยกสำหรับข้อ 4 เพราะเป็นการแก้ test เท่านั้น ไม่มี source fix
+ให้ revert -- ข้อพิสูจน์คือ test ใหม่ผ่านจริงผ่าน HTTP boundary เต็มรูปแบบตามที่แสดงในผลรันด้านบน)
+
+### Verification เพิ่มเติม
+
+รัน local server จริง (`Application.bootstrap` + `HTTPServer` แบบเดียวกับ HTTP test) แล้วยิง
+`GET /api/admin/product-review/exceptions` จริงหลัง `NOT_IN_MASTER` decision หนึ่งรายการ -- ได้ผลลัพธ์ที่มี
+`previous_decision` ครบ (action/reason/actor_id/created_at) ยืนยันว่า endpoint ทำงานผ่าน HTTP จริง ไม่ใช่
+แค่ unit-level
+
+**Residual/ยังไม่ได้ทำในรอบนี้ (นอกขอบเขต 4 จุดที่ระบุ):**
+
+- ไม่ได้ทำ full browser/Playwright visual re-render verification รอบนี้ (เวลาจำกัด, เน้นความถูกต้องของ
+  backend fix + real HTTP/unit test ก่อน) -- ยืนยันแค่ระดับ Python HTTP smoke test ตามที่แสดงข้างต้น ยังไม่มี
+  screenshot ใหม่ Codex ควรตัดสินว่าจำเป็นต้องมีก่อน seal หรือไม่
+- nav button อื่น ๆ ที่ dead มาก่อนหน้า (Inbox/Completed/System Health) ยังไม่ wire -- ไม่อยู่ใน 4 จุดที่
+  ขอให้แก้รอบนี้ จงใจไม่แตะเพื่อจำกัดขอบเขต
+- Batch summary ยังเป็น review-count confirmation surface เหมือนเดิม (residual จาก §28 ที่ยังไม่ถูกขอให้
+  แก้)
+
+**สิ่งที่อยากให้ Codex หักล้าง:**
+
+1. `record_product_review_decision()` ถูกลบทิ้งทั้งหมด (ไม่ใช่แค่จำกัดสิทธิ์) -- ถูกต้องตามเจตนาหรือควร
+   เก็บไว้แบบ private/internal-only เผื่อมี use case ในอนาคต?
+2. Exception "resolve" path reuse `decide()` endpoint เดิมทั้งหมด ไม่มี endpoint แยกสำหรับ
+   "acknowledge/resolve exception" -- เพียงพอหรือควรมี audit event แยกสำหรับ "exception ถูกดูแล้ว" ก่อน
+   ตัดสินใหม่จริง?
+3. Unit picker ใน UI เป็น inline select ธรรมดา ไม่มี keyboard shortcut (1-5 ใช้กับ candidate ปกติเท่านั้น)
+   -- เพียงพอสำหรับ staging หรือควรมี keyboard flow เพิ่ม?
+4. ไม่ได้ทำ visual/Playwright re-verification รอบนี้ -- ต้องการก่อน seal หรือไม่?
+
+ไม่มี production/shared DB mutation, stock/ERP/ADA write, push/PR/deploy หรือ OCR engine rerun ในรอบนี้
+Manifest ไฟล์ที่แก้: `src/ocr_inbound/db.py`, `src/ocr_inbound/product_review.py`,
+`src/ocr_inbound/web.py`, `src/ocr_inbound/web_static/index.html`, `src/ocr_inbound/web_static/app.js`,
+`tests/test_product_review.py`, `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md` (ไม่แตะไฟล์อื่นนอกเหนือจากนี้ในรอบนี้)
+
+หยุดรอ Codex Tech Lead ตรวจใหม่ ห้าม seal/commit/push และห้ามเริ่ม Slice 4
+
+---
+
+## 31. Codex re-adjudication of Slice 3 remediation (§30) (2026-08-20)
+
+**Verdict: BLOCKED — §29 findings ทั้งสี่แก้ถูกทิศทางและ probes เดิมผ่าน แต่ current-state selection ยัง
+ใช้ timestamp + random id เป็นลำดับ “latest” จึงผิดได้ภายในมิลลิวินาทีเดียว.**
+
+Codex ยืนยัน HEAD/base `5d4160e083a7cbae88cf3b2fb30b7c723b646716`; fresh full discovery
+**160/160**, safety scan, JS syntax และ `git diff --check` ผ่าน. Source/probes ยืนยัน unit contract,
+current-prediction lookup ใน `decide()`, exception endpoint/UI wiring, alias audit, dead method removal และ
+real HTTP decision/activation boundary ถูกแก้จริง.
+
+Release blocker ที่ reproduce ได้:
+
+1. `_latest_decisions_by_line()` เชื่อว่า `ORDER BY created_at,id` คือ insertion order แต่ `created_at` มี
+   precision แค่ millisecond และ `new_id()` มี random suffix. สอง decision ใน millisecond เดียวกันจึงเรียง
+   ตาม random id ไม่ใช่ลำดับ commit. Codex บังคับ clock เดียวกันแล้วสร้าง NOT_IN_MASTER ตามด้วย CONFIRM;
+   เมื่อ CONFIRM ได้ id ที่ sort ต่ำกว่า ระบบยังมอง NOT_IN_MASTER เป็น latest และแสดง exception ที่แก้แล้ว.
+   ต้องเพิ่ม/ใช้ monotonic insertion sequence (เช่น SQLite rowid ที่ select/order อย่างชัดเจน หรือ schema
+   sequence ที่เป็น contract) และ test same-timestamp/reversed-id โดยไม่พึ่ง sleep.
+2. Root cause เดียวกันยังอยู่ใน queue prediction selection: `predictions = {line_id: row for row in
+   list_predictions()}` เลือกแถวสุดท้ายจาก `created_at,id` แทน `line.current_prediction_id`. Probe ที่สร้าง
+   prediction สองครั้งใน timestamp เดียวกันได้ queue แสดง prediction id เก่า ขณะที่ authoritative pointer
+   ชี้ prediction ใหม่. `queue()` และ `exceptions()` ต้อง map prediction by id แล้ว dereference
+   `line.current_prediction_id` เท่านั้น เหมือนที่ `decide()` แก้แล้ว; เพิ่ม same-timestamp test ที่ทำให้
+   candidate/product/unit ต่างกันเพื่อพิสูจน์ว่าไม่ใช่ assertion เฉพาะ id.
+
+Accepted: CONFIRM pin proposed unit; CORRECT validates explicit multi-unit selection; stale prediction ถูก
+ปฏิเสธใน commit; exception decisions มี dedicated admin queue และ resolve path; DEFER ยัง resumable;
+`ALIAS_OBSERVED` อยู่ transaction เดียวกัน; HTTP test ใช้ loopback สำหรับ decision ทั้งสามและ activation.
+การลบ dead non-authoritative writer ถูกต้อง ไม่ต้องเก็บเผื่ออนาคต.
+
+ก่อน seal ต้องทำ targeted non-vacuous clock-collision tests, full suite/safety/JS/diff และ fresh browser
+render สำหรับ exception banner + multi-unit picker (รอบ §30 เปลี่ยน UI แต่ไม่ได้ทำ visual rerun). Append
+ledger section ใหม่โดยไม่แก้ §30/§31. **ห้าม seal/commit และห้ามเริ่ม Slice 4.**
+
+Codex ไม่แก้ production source, ไม่ stage/commit/push/deploy และไม่แตะ production/shared DB ในรอบนี้.
+
+---
+
+## 32. Senior Developer (Sonnet) — Slice 3 BLOCKED remediation candidate v4 (2026-08-20)
+
+**สถานะ: REMEDIATED CANDIDATE — awaiting Codex Tech Lead re-adjudication; ห้าม seal/commit/push; ไม่เริ่ม slice ถัดไป**
+
+Base/HEAD ยืนยันตรงกับ §30/§31: `5d4160e083a7cbae88cf3b2fb30b7c723b646716` (parent
+`6737db9efccdc21f54b0d77b5d5ebfea2cd608ac`) แก้ **เฉพาะ ordering race ที่ §31 ระบุ + visual
+re-verification** ไม่แตะ findings อื่นที่ §29/§31 ยอมรับแล้ว ไม่เริ่ม Slice 4
+
+### 1. Monotonic ordering fix
+
+`Repository.list_predictions()` และ `Repository.list_product_review_decisions()` เปลี่ยนจาก
+`ORDER BY created_at,id` เป็น `ORDER BY rowid` -- ทั้งสองตารางใช้ `id` เป็น TEXT PRIMARY KEY จึงมี
+`rowid` แฝงเป็นคอลัมน์แยกที่เพิ่มขึ้นเสมอตามลำดับ insert จริง (ไม่เคยถูกใช้ซ้ำในตาราง append-only
+เหล่านี้) ต่างจาก `created_at` (precision แค่ millisecond) และ `id` ที่มี random suffix ซึ่งสอง
+record ที่ commit ใน millisecond เดียวกันอาจเรียงสลับกันได้
+
+**Defense in depth ตามที่ §31 ขอ:** `ProductReviewService.queue()`/`exceptions()` เปลี่ยนจาก
+`predictions_by_line_id.get(line["id"])` (พึ่งลำดับ list สุดท้าย) เป็น
+`predictions_by_id.get(line["current_prediction_id"])` (dereference authoritative pointer โดยตรง)
+เหมือนที่ `decide()` แก้ไปแล้วในรอบ §30 -- ตอนนี้ทั้งสามจุด (`decide()`, `queue()`, `exceptions()`)
+ใช้วิธีเดียวกันทั้งหมด ไม่มีจุดไหนพึ่ง "แถวสุดท้ายใน list order" อีกต่อไป
+
+### 2. Tests บังคับ same-timestamp + reversed-id (ไม่พึ่ง sleep)
+
+เพิ่ม `DecisionOrderingRaceTests` (2 tests) ใช้ `unittest.mock.patch` แทน `db_module.now_iso`
+(คืนค่าเดียวกันทุกครั้ง) และ `db_module.new_id` (ให้ id เรียงแบบย้อนกลับจากลำดับเรียกจริงเฉพาะ
+prefix ที่กำหนด ส่วน prefix อื่นยังเรียก `new_id` จริง):
+
+- `test_same_timestamp_reversed_decision_id_still_treats_the_truly_later_decision_as_current`:
+  NOT_IN_MASTER (insert ก่อน, id ใหญ่กว่า) ตามด้วย CONFIRM (insert หลัง, id เล็กกว่า) ในมิลลิวินาที
+  เดียวกัน -- ต้องเห็น CONFIRM เป็น current เสมอ (ไม่อยู่ทั้ง queue และ exceptions, review_status
+  เป็น CONFIRMED)
+- `test_same_timestamp_reversed_prediction_id_queue_still_reflects_current_prediction_id`:
+  prediction สองอันในมิลลิวินาทีเดียวกัน เสนอสินค้า**และหน่วยต่างกัน**ทั้งคู่ (A/BOX แล้ว B/EACH,
+  id ของ A ใหญ่กว่า) -- `queue()` ต้องแสดง B/EACH เสมอ (ไม่ใช่ assertion เฉพาะ id ตามที่ Codex ขอ)
+
+### 3. บั๊กเพิ่มเติมที่พบระหว่าง visual re-verification (นอกแผนเดิม)
+
+เปิด UI จริงผ่าน Chrome DevTools MCP (`navigate_page`/`click`/`fill`/`take_screenshot`) กับ local
+server จริง (`Application.bootstrap` + `serve()`) ยืนยัน exception banner (action/actor/time/reason)
+render ถูกต้องตามที่คาด แต่พบว่า **multi-unit picker ไม่เปิดเลย** เมื่อเลือกสินค้าหลายหน่วยผ่าน
+ช่องค้นหา -- ตรวจพบว่า `ProductReviewService.search_master()` สร้างผลลัพธ์จาก
+`cache.list_products()` ซึ่ง **ไม่ join `product_units`** (มีแค่ `get_product()` ที่ join) ทำให้
+`units` ของทุกผลการค้นหาเป็น `[]` เสมอ -- CORRECT ผ่านช่องค้นหาไปยังสินค้าหลายหน่วยจริงจะ fail ที่
+`UNIT_REQUIRED` ฝั่ง server โดยไม่มีทางให้ admin เห็นสาเหตุหรือเลือกหน่วยได้เลย แก้โดยให้
+`search_master()` re-fetch แต่ละ match ผ่าน `get_product()` เพื่อให้ `units` เป็นข้อมูลจริง
+
+หลังแก้ เปิด UI ซ้ำ (server ใหม่) ยืนยันด้วยตา + `evaluate_script`: candidate button มี
+`data-units=["BOX","EACH"]` จริง, unit picker เปิดพร้อม `<select>` มีทั้งสอง option, เลือก "EACH"
+กด "ยืนยันหน่วยที่เลือก" แล้ว toast "บันทึก decision และ alias candidate แล้ว" ปรากฏ, และตรวจ
+`/api/workspace` ยืนยันบรรทัดเปลี่ยนเป็น `ada_product_code=6300001, ada_unit_code=EACH,
+review_status=CORRECTED` จริง -- ครบ end-to-end ทั้งฝั่ง UI และฝั่งเซิร์ฟเวอร์
+
+เพิ่ม `test_master_search_results_carry_real_units_not_an_empty_list` ใน
+`ProductReviewUnitContractTests`
+
+### Test counts
+
+- `tests/test_product_review.py`: **25/25 ผ่าน** (22 เดิมจาก §30 + 3 ใหม่: 2 ordering-race +
+  1 search_master-units-fix)
+- Full discovery: **163/163 ผ่าน** ใน ~27s (160 เดิมจาก §30 + 3 ใหม่)
+- `scripts/safety_scan.py`, `node -c app.js`, `git diff --check`: ผ่านครบ
+
+### Revert-check (non-vacuous, ทำแยกทีละจุด)
+
+| จุดที่แก้ | วิธี revert ชั่วคราว | ผล |
+|---|---|---|
+| Monotonic ordering (`rowid`) + `current_prediction_id` dereference ใน queue/exceptions | คืน `ORDER BY rowid` กลับเป็น `ORDER BY created_at,id` ทั้งสอง query และคืน `queue()`/`exceptions()` ให้ใช้ `predictions_by_line_id`/`line["id"]` แบบเดิม | **2/2 test ใหม่ fail จริง**: decision-race ได้ `exceptions()` ยังมี 1 รายการ (NOT_IN_MASTER ผิด ๆ ยังอยู่); prediction-race ได้ `IC-RACE-A`/`BOX` แทน `IC-RACE-B`/`EACH` |
+| `search_master()` join units ผ่าน `get_product()` | คืนเป็น `product.get("units",[])` จาก `list_products()` แบบเดิม | **1/1 test fail จริง**: `units` ว่างเปล่า แทนที่จะมี `{BOX,EACH}` |
+
+คืนไฟล์ที่แก้แล้วกลับเข้าไปหลังทดสอบทุกจุด แล้ว full suite/safety/JS/diff-check ผ่านครบเหมือนเดิม
+
+### Visual re-verification (Chrome DevTools MCP, local server จริง, ไม่ใช่ screenshot เก่า)
+
+- Exception banner: ✅ เห็นจริงบนหน้าจอ พร้อม action/actor/time/reason ครบ
+- Multi-unit picker: ✅ เห็นจริงบนหน้าจอหลังแก้ `search_master()`, เลือกหน่วยได้จริง, submit สำเร็จ,
+  ยืนยันผลที่ persist จริงผ่าน `/api/workspace`
+- ไม่มี OCR rerun, ไม่มี production/shared DB access ระหว่าง verification (local SQLite + fixture
+  SVG เท่านั้น, server bind `127.0.0.1` loopback เท่านั้น)
+
+**สิ่งที่อยากให้ Codex หักล้าง:**
+
+1. `ORDER BY rowid` ใช้ได้ปลอดภัยตราบเท่าที่ไม่มี `VACUUM`/`INTEGER PRIMARY KEY` มา alias `rowid`
+   ในตารางเหล่านี้ -- ยืนยันแล้วว่าทั้งสองตารางใช้ `id TEXT PRIMARY KEY` ไม่ใช่ INTEGER ถูกต้องตาม
+   สมมติฐานหรือไม่ ต้องมี explicit schema comment เพิ่มเพื่อกัน migration ในอนาคตเผลอเปลี่ยน primary
+   key เป็น INTEGER หรือไม่?
+2. บั๊ก `search_master()` units-always-empty เป็นบั๊กเก่าที่ไม่มีใครสังเกตมาตั้งแต่ §26/§28 (ไม่ใช่
+   ผลจากรอบนี้) -- ยืนยันว่าการแก้ตรงนี้อยู่ในขอบเขต "unit contract + visual verification" ที่ขอมา
+   รอบนี้หรือควรแยกเป็น finding ใหม่?
+
+ไม่มี production/shared DB mutation, stock/ERP/ADA write, push/PR/deploy หรือ OCR engine rerun ในรอบนี้
+Manifest ไฟล์ที่แก้เพิ่มจาก §30: `src/ocr_inbound/db.py`, `src/ocr_inbound/product_review.py`,
+`tests/test_product_review.py`, `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md`
+
+หยุดรอ Codex Tech Lead ตรวจใหม่ ห้าม seal/commit/push และห้ามเริ่ม Slice 4
+
+---
+
+## 33. Codex final re-adjudication of Slice 3 candidate v4 (2026-08-20)
+
+**Verdict: APPROVED TO SEAL locally — no push/merge/deploy authority implied.**
+
+Codex independently confirmed HEAD/base `5d4160e083a7cbae88cf3b2fb30b7c723b646716`, inspected the
+ordering/current-pointer/unit-search changes, reran the prior adversarial race under a forced identical clock
+for 20 documents (no stale decision or prediction), and reran fresh full discovery **163/163** plus safety
+scan, JavaScript syntax and `git diff --check` successfully.
+
+Accepted findings: decision recency now follows SQLite insertion order rather than millisecond/random-id
+sorting; queue/exceptions dereference authoritative `current_prediction_id`; master search expands each match
+through `get_product()` so active units reach the picker; multi-unit CORRECT persists the explicitly selected
+unit. Sonnet's fresh browser evidence for exception banner and BOX/EACH picker is accepted alongside Codex's
+source/HTTP/SQLite verification. Codex could not independently capture the same screenshots because the
+in-app Browser plugin remains version-mismatched, so no broader visual/accessibility approval is implied.
+
+`ORDER BY rowid` is accepted for the current staging topology because both tables use TEXT primary keys,
+are DB-trigger-enforced append-only, and SQLite is single-writer. Future maintenance/migration that rebuilds
+these tables, introduces deletion/VACUUM assumptions, or aliases rowid with an INTEGER PRIMARY KEY must
+preserve an explicit monotonic decision-order contract or replace this with a dedicated sequence. This is a
+future schema invariant, not a blocker for this local seal.
+
+Seal only this exact cumulative Slice-3 manifest by explicit path; do not use `git add -A`:
+
+- `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md`
+- `src/ocr_inbound/__main__.py`
+- `src/ocr_inbound/db.py`
+- `src/ocr_inbound/service.py`
+- `src/ocr_inbound/web.py`
+- `src/ocr_inbound/product_review.py`
+- `src/ocr_inbound/migrations/0003_product_review.sql`
+- `src/ocr_inbound/web_static/index.html`
+- `src/ocr_inbound/web_static/app.js`
+- `src/ocr_inbound/web_static/app.css`
+- `tests/test_product_review.py`
+- `tests/test_matching_integration.py`
+
+Exclude `.playwright-cli/`, `environments/`, `docs/HANDOFF_SLICE2_TO_NEXT_SESSION_TH.md`, OCR run outputs,
+source documents, models, credentials, and every unrelated untracked file. Parent must remain
+`5d4160e083a7cbae88cf3b2fb30b7c723b646716`. Before commit run the same 163-test/safety/JS/diff gates,
+then commit locally and report SHA/parent/manifest/status. **Do not push and do not start Slice 4 without
+separate human authorization.**
+
+Codex changed no production source, staged nothing, made no commit/push/deploy, and accessed no
+production/shared DB in this adjudication.

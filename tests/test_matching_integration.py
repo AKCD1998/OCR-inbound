@@ -280,7 +280,7 @@ class ProductNameAliasSQLiteIntegrationTests(unittest.TestCase):
         with self.repository.connect() as connection:
             versions = [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
             table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_name_aliases'").fetchone()
-        self.assertEqual(versions, [1, 2])
+        self.assertEqual(versions, [1, 2, 3])
         self.assertIsNotNone(table)
 
     def test_existing_v1_database_upgrades_to_v2(self):
@@ -296,7 +296,7 @@ class ProductNameAliasSQLiteIntegrationTests(unittest.TestCase):
         with self.repository.connect() as connection:
             versions = [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")]
             table = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='product_name_aliases'").fetchone()
-        self.assertEqual(versions, [1, 2])
+        self.assertEqual(versions, [1, 2, 3])
         self.assertIsNotNone(table)
 
     def test_three_distinct_documents_promote_then_human_approval_activates(self):

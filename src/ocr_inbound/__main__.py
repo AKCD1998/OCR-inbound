@@ -16,6 +16,7 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--environment", default="staging", choices=["staging", "production"])
     root.add_argument("--data-root", type=Path)
     root.add_argument("--reviewer", default="staging-reviewer")
+    root.add_argument("--admin", action="store_true", help="Enable the local admin-only product review queue")
     sub = root.add_subparsers(dest="command")
     serve_parser = sub.add_parser("serve", help="Launch the local staging UI")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -40,7 +41,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        app = Application.bootstrap(environment=args.environment, data_root=args.data_root, reviewer_id=args.reviewer)
+        app = Application.bootstrap(environment=args.environment, data_root=args.data_root, reviewer_id=args.reviewer, is_admin=args.admin)
         command = args.command or "serve"
         if command == "serve":
             serve(app, args.host, args.port, not args.no_browser)

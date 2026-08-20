@@ -75,6 +75,7 @@ class Repository:
             self.backup("pre-migration")
         sql = importlib.resources.files("ocr_inbound").joinpath("migrations/0001_initial.sql").read_text(encoding="utf-8")
         sql_0002 = importlib.resources.files("ocr_inbound").joinpath("migrations/0002_product_name_aliases.sql").read_text(encoding="utf-8")
+        sql_0003 = importlib.resources.files("ocr_inbound").joinpath("migrations/0003_product_review.sql").read_text(encoding="utf-8")
         connection = self.connect()
         try:
             # Journal mode is persistent database metadata. Setting it once at
@@ -87,6 +88,9 @@ class Repository:
                 version = 1
             if version < 2:
                 connection.executescript(sql_0002)
+                version = 2
+            if version < 3:
+                connection.executescript(sql_0003)
             connection.commit()
         finally:
             connection.close()
@@ -246,8 +250,66 @@ class Repository:
         return dict(row)
 
     def list_predictions(self, document_id: str) -> list[dict]:
+        # §31: `created_at` has only millisecond precision and `id` (new_id())
+        # has a random suffix -- two predictions persisted in the same
+        # millisecond can sort in EITHER order by (created_at,id), which is
+        # not insertion order. SQLite's implicit `rowid` (this table uses a
+        # TEXT PRIMARY KEY `id`, so `rowid` is a separate, always-monotonic
+        # hidden column, never reused within this append-only table) is the
+        # one ordering that is actually guaranteed to match commit order.
         with self.connect() as connection:
-            return [dict(row) for row in connection.execute("SELECT * FROM layer_f_predictions WHERE document_id=? ORDER BY created_at,id", (document_id,))]
+            return [dict(row) for row in connection.execute("SELECT * FROM layer_f_predictions WHERE document_id=? ORDER BY rowid", (document_id,))]
+
+    def commit_product_review(self, payload: dict, actor: Actor) -> dict:
+        """Atomically commits receipt, authoritative label, audit, and alias observation."""
+        timestamp = now_iso()
+        with self.transaction() as connection:
+            existing = connection.execute("SELECT * FROM product_review_decisions WHERE request_id=?", (payload["request_id"],)).fetchone()
+            if existing:
+                if existing["request_fingerprint"] != payload["request_fingerprint"]:
+                    raise DomainError("IDEMPOTENCY_PAYLOAD_CONFLICT", "Request id was already used with a different review payload")
+                return dict(existing)
+            line = connection.execute("SELECT * FROM document_lines WHERE id=? AND document_id=?", (payload["document_line_id"], payload["document_id"])).fetchone()
+            if line is None or line["current_prediction_id"] != payload["prediction_id"]:
+                raise DomainError("PREDICTION_STALE", "Review requires the current persisted prediction")
+            decision_id = new_id("prd")
+            self._insert(connection, "product_review_decisions", {"id": decision_id, **payload, "actor_id": actor.actor_id, "created_at": timestamp})
+            action = payload["action"]
+            if action in {"CONFIRM", "CORRECT"}:
+                event_id = new_id("rev")
+                final = {"product_code": payload["selected_product_code"], "unit_code": payload["selected_unit_code"]}
+                proposed = {"product_code": line["ada_product_code"], "unit_code": line["ada_unit_code"]}
+                self._insert(connection, "review_events", {"id":event_id,"interaction_id":new_id("int"),"target_type":"PRODUCT","document_id":payload["document_id"],"document_line_id":line["id"],"prediction_id":payload["prediction_id"],"action":action,"original_value_json":canonical_json(proposed),"proposed_value_json":canonical_json(proposed),"final_value_json":canonical_json(final),"error_category":payload["error_category"],"evidence_json":line["evidence_json"],"versions_json":canonical_json({"ruleset":payload["ruleset_version"]}),"reviewer_id":actor.actor_id,"reviewer_display_name":actor.display_name,"decision_duration_ms":payload["duration_ms"],"occurred_at":timestamp})
+                connection.execute("UPDATE document_lines SET ada_product_code=?,ada_unit_code=?,match_status='CONFIRMED',review_status=?,row_revision=row_revision+1,updated_at=? WHERE id=?", (payload["selected_product_code"],payload["selected_unit_code"],"CORRECTED" if action=="CORRECT" else "CONFIRMED",timestamp,line["id"]))
+                alias = connection.execute("SELECT * FROM supplier_product_aliases WHERE supplier_code=? AND normalized_supplier_text=? AND ada_product_code=?", (payload["supplier_code"],payload["normalized_alias"],payload["selected_product_code"])).fetchone()
+                if alias is None:
+                    alias_id=new_id("als"); self._insert(connection,"supplier_product_aliases",{"id":alias_id,"supplier_code":payload["supplier_code"],"normalized_supplier_text":payload["normalized_alias"],"ada_product_code":payload["selected_product_code"],"status":"CANDIDATE","confirmation_count":1,"correction_count":0,"distinct_document_count":1,"observed_document_ids_json":canonical_json([payload["document_id"]]),"created_at":timestamp,"updated_at":timestamp})
+                else:
+                    alias_id=alias["id"]
+                    ids=set(json.loads(alias["observed_document_ids_json"])); ids.add(payload["document_id"]); count=len(ids); status="ELIGIBLE" if count>=3 and alias["status"]=="CANDIDATE" else alias["status"]
+                    connection.execute("UPDATE supplier_product_aliases SET confirmation_count=confirmation_count+1,distinct_document_count=?,observed_document_ids_json=?,status=?,updated_at=?,version=version+1 WHERE id=?",(count,canonical_json(sorted(ids)),status,timestamp,alias["id"]))
+                conflicts=connection.execute("SELECT COUNT(DISTINCT ada_product_code) FROM supplier_product_aliases WHERE supplier_code=? AND normalized_supplier_text=?",(payload["supplier_code"],payload["normalized_alias"])).fetchone()[0]
+                if conflicts>1: connection.execute("UPDATE supplier_product_aliases SET status='QUARANTINED',updated_at=? WHERE supplier_code=? AND normalized_supplier_text=?",(timestamp,payload["supplier_code"],payload["normalized_alias"]))
+                # §29 finding 3: this alias-state mutation used to go
+                # straight through with no dedicated audit trail (only the
+                # generic PRODUCT_REVIEW_DECIDED below) -- the pre-existing
+                # Repository.record_alias_observation() path (Slice 1)
+                # always wrote an ALIAS_OBSERVED event here; this path must
+                # too, so alias learning stays traceable the same way
+                # regardless of which code path produced the observation.
+                self._insert_audit(connection,actor.actor_id,"ALIAS_OBSERVED","supplier_product_alias",alias_id,new_id("corr"),{"document_id":payload["document_id"],"conflict":conflicts>1})
+                self._invalidate_document(connection,payload["document_id"],timestamp)
+            self._insert_audit(connection,actor.actor_id,"PRODUCT_REVIEW_DECIDED","document_line",line["id"],new_id("corr"),{"decision_id":decision_id,"action":action})
+            return dict(connection.execute("SELECT * FROM product_review_decisions WHERE id=?",(decision_id,)).fetchone())
+
+    def list_product_review_decisions(self, document_id: str) -> list[dict]:
+        # §31: same monotonic-ordering fix as list_predictions() above --
+        # `rowid` (product_review_decisions also has a TEXT PRIMARY KEY
+        # `id`, so `rowid` is a separate always-increasing hidden column)
+        # is the only ordering guaranteed to match actual commit order when
+        # two decisions land in the same millisecond.
+        with self.connect() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM product_review_decisions WHERE document_id=? ORDER BY rowid", (document_id,))]
 
     def review_header(self, document_id: str, field_name: str, final_value: Any, action: str, error_category: str | None, duration_ms: int, actor: Actor, correlation_id: str) -> dict:
         with self.transaction() as connection:
