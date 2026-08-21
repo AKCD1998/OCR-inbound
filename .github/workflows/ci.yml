@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+# Least privilege: these gates only read the checked-out tree. They never push,
+# comment, release, or touch packages, so the default token scope (which can be
+# read-write depending on repository settings) is narrowed here explicitly.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes an in-flight run; the older one is
+# cancelled rather than left burning runner minutes on a stale commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Five gates (${{ matrix.os }})
+    strategy:
+      # One OS failing must not cancel the other -- both are first-class
+      # targets (the product targets Windows; Linux is expected-but-newer).
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        # bash is available on both runner images and accepts the
+        # `PYTHONPATH=src <cmd>` prefix form used by the verified commands;
+        # the Windows default (pwsh) does not.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The suite is standard-library only (verified locally: all 266 tests
+      # pass on a clean 3.11.9 interpreter with nothing installed). There is
+      # deliberately NO pip install step: requirements.txt is the heavy OCR
+      # Layers A-E toolchain (torch/paddle/opencv/easyocr) that nothing in
+      # these gates imports, and pg8000 is the lazily-imported, operator-only
+      # master-cache dependency that CI must not exercise.
+
+      - name: Gate 1 - compile all sources (src, tests, scripts)
+        run: python -m compileall -q src tests scripts
+
+      - name: Gate 2 - full unittest suite (stdlib only)
+        run: PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -t .
+
+      - name: Gate 3 - safety scan (secrets, read-only catalog, live flags off)
+        run: PYTHONPATH=src python scripts/safety_scan.py
+
+      - name: Gate 4 - build staging zipapp
+        run: python scripts/build_staging.py
+
+      - name: Gate 5 - package smoke (loopback bind + packaged worker subprocess)
+        run: python scripts/package_smoke.py
