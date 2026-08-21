@@ -1269,3 +1269,396 @@ separate human authorization.**
 
 Codex changed no production source, staged nothing, made no commit/push/deploy, and accessed no
 production/shared DB in this adjudication.
+
+## 34. Senior Developer (Sonnet) — Slice 4 Phase A/B interim checkpoint (2026-08-21)
+
+**Status: IN PROGRESS, not a Candidate Report. No seal/commit, HEAD unchanged at `9a4fc81`, nothing
+staged.** This section records verified progress on Slice 4 (Automatic Page/Row Extraction) so far:
+Phase A (read-only characterization) and Phase B (contract/tests) are functionally complete and
+genuinely passing against real evidence; Phase C (matcher integration + versioned artifact writer),
+Phase D (Page Review UI), and Phase E (full 10-page verification report) have not been started. This
+is an interim record, not the final Candidate Report the user asked to stop before.
+
+**New files (untracked, not staged):** `src/ocr_inbound/page_extraction.py`,
+`tests/test_page_extraction.py`. No existing tracked file was modified.
+
+**Phase A — real evidence characterization (all 10 pages, read-only, OCR NOT rerun):**
+PaddleOCR JSON confirmed as `[{text, score, poly: [[x,y]]*4}]`, same pixel space as the page PNG
+(page-005 verified 2457x3483px). Tesseract confirmed plain-text-only, no coordinates. EasyOCR
+confirmed completely empty for all 10 pages, unusable. Supplier/doc-type per page: 005=Berlin(Tax
+Invoice), 006=Unison, 013/014/015=Woothi (014 = continuation page "หน้าที่ 2/3"), 019=DKSH(Tax
+Invoice), 030=Charoon Bhesaj, 040=DKSH(**real Credit Note**, confirmed via its own header text),
+048=Medline, 058=Community Pharmacy. Only page-005 (Berlin) uses a classic single tabular block with
+column headers naming every field (Description/Lot/Mfg.Date/Exp.Date/Quantity/UOM/Unit
+Price/Total Amount, printed twice — Thai then English). The other 9 pages were read token-by-token
+and turned out to use materially different layouts, e.g. page-006 (Unison) repeats a multi-line
+per-product block with no column headers at all (code/description/pack-size/unit/total on one line,
+generic name on the next, `LOT. J02404` on the next, `MFG. dd/mm/yy EXP. dd/mm/yy` on the next);
+page-030 (Charoon Bhesaj) has a 4-column header (Description/Quantity/Unit Price/Total Amount only —
+no separate Lot/Mfg/Exp/Unit header) with Lot+expiry embedded as free text inside each product line
+(`[เลขที่ผลิต 682009 - วันหมดอายุ 15/01/2029]`); page-058 (Community Pharmacy) has scattered,
+non-adjacent field labels with no coherent header band at all.
+
+**Phase B — contract + tests, real bug found and fixed:** `page_extraction.py` implements a
+generic column-header-driven extractor (`PAGE_EXTRACTION_CONTRACT_VERSION = "page-extract-v1"`):
+tokens below `min_token_score=0.30` are dropped with provenance in `warnings`; the table header band
+is located structurally (the Y-band with the most DISTINCT column keywords matched close together,
+minimum 5 distinct columns, tolerant of the bilingual Thai+English double-header) rather than by
+matching keywords anywhere on the page; rows are formed by chained Y-proximity clustering; each token
+is assigned to whichever column band it overlaps most in X; every field keeps full provenance
+(engine/raw_text/normalized_value/page_number/polygon/bbox/confidence); dates are kept as raw
+day/month/year with `era: "UNSPECIFIED"` (Phase A found BE and CE dates coexisting on the same page
+with no on-page rule distinguishing them); an arithmetic sanity guard flags
+`QUANTITY_PRICE_TOTAL_MISMATCH` without ever correcting a value; rows with no description-column
+token at all are treated as non-product noise (e.g. a "VAT INCLUDED" note line) and excluded with a
+`NON_PRODUCT_ROW_EXCLUDED` warning rather than emitted as an empty product row.
+
+First implementation genuinely found 7 clusters on Berlin page-005 instead of 5, with some clusters
+missing a description entirely — root cause was two real bugs, both fixed and covered by regression
+tests before being called done (not by loosening assertions to fit buggy output):
+1. `_find_column_bands` originally matched every keyword occurrence anywhere on the page. Real page-005
+   footer/signature text (`จำนวนเงินรวม`, a second stray `TOTAL AMOUNT` label, `รายการ` inside a
+   disclaimer sentence, `(จำนวน..` inside payment terms) matched column keywords far below the real
+   header, inflating `header_max_y` from ~1340 to ~3018 and pulling scattered footer tokens into the
+   product-row region. Fixed by requiring the header band to be the Y-band where >=5 DISTINCT columns
+   cluster together (the real header prints 8 columns twice, ~74px apart), with substring-keyword
+   collisions (`จำนวน`/quantity is a literal substring of `จำนวนเงินสุทธิ`/total_amount) resolved by
+   longest-keyword-wins specificity.
+2. `_cluster_rows` anchored every comparison on the FIRST token added to a row rather than the last,
+   so a real product row whose own tokens span slightly more than one tolerance window from end to
+   end (Berlin's UTMOS row: description at y~1656 vs its own total_amount at y~1683, a 27px spread)
+   split into two spurious clusters even though every adjacent pair of its own tokens is well within
+   tolerance. Fixed to chain-compare against the last token added to the row instead.
+
+All 16 tests in `tests/test_page_extraction.py` pass genuinely against real evidence (Berlin page-005
+finds exactly 5 rows in order with correct Lot/qty/unit per product and no cross-product bleed; dates
+kept raw with `era: UNSPECIFIED`; subtotal/discount lines never become product rows; the real
+score-0.096 stray `"o"` token found in Phase A is excluded and logged, not misread as a field; bounding
+boxes stay within page dimensions; extraction is deterministic on rerun; contract version is stamped;
+document type correctly resolves TAX_INVOICE for page-005 and CREDIT_NOTE for the real page-040; the
+real page-014 continuation page extracts without crashing; two small synthetic unit tests isolate the
+clustering primitive itself, declared as synthetic in their own docstrings). Full regression:
+`python -m unittest tests.test_automation tests.test_core tests.test_matching
+tests.test_matching_behavioral_revert_check tests.test_matching_integration tests.test_page_extraction
+tests.test_product_review tests.test_system` → **179/179 OK** (163 prior + 16 new, zero regressions).
+`py_compile` clean on both new files, `git diff --check` clean, no secrets/production hostnames/keys
+found in the new module (grep swept for password/secret/api_key/token/postgres:// literals — only
+matches were the `Token` class name and `token` variable names).
+
+**Honest finding, not yet resolved — this IS the main open question for Phase C:** running the
+extractor across all 10 pages (Phase E-style, OCR not rerun) shows `table_found=True` for page-005
+only; the other 9 pages honestly report `table_found=False` with a `NO_TABLE_HEADER_FOUND` warning,
+because their real header bands never reach the 5-distinct-column threshold (page-030's real header
+has only 4 recognizable columns; page-058's field labels are scattered with no coherent band; page-006
+has no column-header row at all, only per-product multi-line blocks). This is deliberate,
+conservative behavior consistent with requirement #7 ("never guess row relationships when evidence
+conflicts, quarantine/review instead") rather than a crash or a fabricated row — but it means the
+generic single-strategy extractor genuinely only covers 1 of the 10 real pages end-to-end today.
+Whether that satisfies requirement #11 ("does not need to support every supplier layout in the world,
+but the 10 pages with real evidence must be processed reproducibly/verifiably") on its own, or whether
+Phase C's "supplier-specific adapters with a shared generic interface and fail-safe fallback" (already
+named in the mandated plan) needs to be built out for at least the Unison-style multi-line block and
+the Charoon-Bhesaj-style embedded-Lot layout before this is reportable as covering "the 10 pages", is
+exactly the kind of scope question this checkpoint surfaces rather than resolves unilaterally.
+
+**Remaining before a real Candidate Report can be written (not started yet):** the versioned JSON
+artifact writer the Review UI is meant to import; a decision + implementation on supplier-specific
+adapters for the non-Berlin layouts (see above); Phase D Page Review UI (image+overlay left, all rows
+right, bidirectional highlight, provenance modal, keyboard access, ported into the authoritative
+`web.py`/`web_static/*`, not the gitignored eval artifact); Phase E full 10-page verification report
+with field-accuracy breakdown, runtime, and fresh browser visual verification via Chrome DevTools MCP;
+the final Thai-language Candidate Report itself. No commit, no push, no PR, no deploy, no
+production/shared DB access, no Product Matcher modification, and no Slice 5 work has occurred — all
+in accordance with the standing instruction to stop before sealing and wait for Codex.
+
+**Phase C matcher integration — read-only proof added (2026-08-21, same session):** added
+`MatcherIntegrationReadOnlyTests` to `tests/test_page_extraction.py` (real `AppTestCase`
+bootstrap — an ephemeral local SQLite `data_root`, same pattern every existing test in this suite
+already uses, seeded only from the packaged `resources/ada_fixture.json` fixture, never a
+shared/production database). The test extracts the real Berlin page-005 rows, builds an in-memory
+`document`/`line` dict per row (never persisted), and calls `matcher._predict(document, line,
+ocr_versions)` — the PURE half of `ProductMatcher` that `predict_and_persist()` itself calls before
+its own separate write step — directly, never calling `predict_and_persist()` and never touching
+`matching.py`. Asserts the real matcher's return contract (`tier`/`method`/`reason_codes`/
+`candidate_set`/`proposed_product_code`) is present for all 5 rows, and asserts
+`repository.list_lines()` for the synthetic document_id is empty afterward, proving nothing was
+written. All 5 Berlin rows correctly return `UNRESOLVED`/`NO_MASTER_CANDIDATE_RESOLVED` against the
+fixture's unrelated product names — this is the honest, expected result (the fixture was never meant
+to contain real Berlin drug names) and is not evidence of a matching defect; it demonstrates the
+plumbing works, not that real matches would be found without real master data. Also exercised
+manually via a one-off, explicitly gitignored probe script
+(`ocr_runs_staging/slice4_matcher_probe.py`, confirmed via `git check-ignore -v`) that prints
+per-row tier/candidates for visibility; not imported by any production or test code. Suite after this
+addition: **180/180 OK** (163 baseline + 17 Slice 4 tests, up from 16). `safety_scan.py` still passes
+(`secret_scan: pass`, `ada_query_catalog: pass`, `live_flags_default_off: true`), `py_compile` and
+`git diff --check` clean, HEAD unchanged at `9a4fc81`, nothing staged.
+
+Still not started: the versioned JSON artifact writer, supplier-adapter decision, Phase D UI, Phase E
+full report, and the Candidate Report itself.
+
+## 35. Codex continuation — Slice 4 candidate completed after Sonnet connection loss (2026-08-21)
+
+Sonnet's preceding process ended with `ECONNRESET` after its 183-test verification; Codex inspected the
+shared worktree and resumed without restarting or discarding its work. Codex added the deterministic
+`page-extraction-bundle.v1` builder and atomic writer, a ten-page read-only build script, and the
+authoritative staging Page Review UI. The UI accepts the page artifact plus local page images and
+renders full-page evidence, real Paddle bounding-box overlays, every extracted row, matcher result,
+and quarantine reasons with bidirectional hover/click highlighting.
+
+Fresh evidence bundle result: 10 pages processed, 4 pages with extracted rows, 14 rows total, 9 rows
+requiring review. Page 005 yields five Berlin rows; page 006 yields two Unison blocks (both quarantined
+as duplicates); page 048 yields five Medline blocks with quantity/unit/price explicitly unavailable;
+page 058 yields two Community Pharmacy blocks with no description and therefore `NOT_EVALUATED` by
+the matcher. Pages 013/014/015/019/030/040 remain honest `NONE` results. This is meaningful partial
+coverage, not a claim of production-complete extraction.
+
+Verification: focused 22/22; full 185/185; safety scan pass; Python compile, JS syntax, and diff check
+clean. Playwright opened the real staging server, uploaded the generated bundle and ten page images,
+verified five Berlin overlays/rows, hover-linked MONOLIN row 3, navigated to Unison page 006, and
+observed quarantine plus `NOT_EVALUATED` for the empty description. Screenshot:
+`output/playwright/slice4-page5.png`. The only console error was an unrelated missing favicon 404.
+
+Full report: `CANDIDATE_REPORT_SLICE4_PAGE_EXTRACTION.md`. No stage/commit/push/deploy, production or
+shared DB access, OCR rerun, matcher change, migration, or Slice 5 work occurred.
+
+## 36. Senior Developer (Sonnet) — Community Pharmacy supplier adapter candidate (2026-08-21)
+
+**Status: CANDIDATE, not sealed.** Base/HEAD unchanged at `9a4fc81`. Continues directly from §35
+(Codex's completed Slice 4 candidate) per explicit instruction: add a THIRD, deterministic,
+supplier-identity-gated layout adapter for real page-058 (บริษัท ชุมชนเภสัชกรรม จำกัด (มหาชน) /
+Community Pharmacy) evidence. This is a layout adapter, not ML training — no model, no learned
+weights, tests-first against real evidence per the standing "no hand-copied fixture called automatic
+extraction" rule.
+
+**Root cause of §35's honest-but-empty page-058 result (proven before fixing):** the generic
+multi-line-block adapter's 6-digit-then-10-digit internal-code heuristic never found a real product
+code row on page-058 because there isn't one to find with that heuristic -- page-058 is a genuinely
+different, THIRD real layout with its own single-language 5-column table header
+(`รหัสสินค้า`/`รายละเอิยด`/`จำนวน`/`ราคารวมภาษี`/`จำนวนเงิน`) that the multi-line-block adapter was
+never designed to read. Confirmed by re-reading the real token dump (not by guessing): supplier's own
+5-digit code `32132`, description `CODIPHEN TABLET(XIOS)` printed twice, quantity+unit fused per row
+(`240.00 box`, `96.00 box`), and Lot/Mfg/Exp fused onto one line per block, immediately following its
+own data row with no intervening generic-name row (unlike Unison/Medline's shape).
+
+**New adapter (`_community_pharmacy_code_table_rows`, `src/ocr_inbound/page_extraction.py`):**
+selected only when BOTH a real supplier-identity marker (`ชุมชนเภสัชกรรม`, found anywhere in the
+page's own text) AND this table's own column header (>=3 distinct concepts from a dedicated keyword
+map, reusing the same longest-keyword-wins/Y-band-clustering primitives the generic tabular strategy
+already uses via a newly generalized `_find_header_band` helper) are both found -- never selected by
+filename or page number, and Berlin page-005 was checked to confirm it does NOT trigger this adapter.
+Pairs each data row with the row immediately below it when that row is a fused Lot/Mfg/Exp marker
+(reusing `_LOT_MARKER_RE`/`_DATE_FINDALL_RE`); assigns fields by real column X-band overlap, not
+heuristic "longest token" guessing; splits fused quantity+unit text via a generic number-then-word
+pattern; adds a new `supplier_sku` field (present on all three strategies now, for schema
+consistency) that is NEVER folded into `description`/`raw_ocr_text` -- it is routed only into the
+matcher's existing `line["supplier_sku"]` contract (matching.py, unmodified), which the matcher
+already treats as exact-alias-lookup-only evidence, never internal-code text-scan evidence. Real
+evidence explicitly shows the SAME Lot/Mfg/Exp on two rows with DIFFERENT quantities (240.00 vs
+96.00) and distinct geometry, so this adapter deliberately does NOT run the generic adapter's
+same-Lot duplicate-quarantine rule -- both rows stand on their own.
+
+Also fixed, as a direct consequence of exercising `_find_totals_boundary` against this new real page:
+the totals-boundary search bounded the product-row region by the matching TOTALS-keyword token's own
+y0 only, but page-058's real totals line has its label token sitting a few px BELOW its own numeric
+value in the same row (OCR baseline noise) -- letting that numeric value leak in as a spurious third
+row. Fixed to bound by the whole row-cluster's minimum y0; re-verified this only tightens the cut and
+does not affect Berlin/Unison/Medline (their totals lines are >>25px from the nearest real product
+row in every case examined).
+
+**Tests (all against real page-058 evidence, `CommunityPharmacyAdapterRealPageTests` +
+`CommunityPharmacyMatcherIntegrationTests`):** exactly 2 rows in document order; both read CODIPHEN;
+supplier SKU `32132` never becomes an internal code (asserted against the real `INTERNAL_CODE` regex
+shape and confirmed absent from the description field); Lot/Mfg/Exp identical and correct on both rows
+without shifting; quantities `240.0` then `96.0` in order, same Lot NOT flagged duplicate; every field
+bbox within the real page's dimensions; deterministic rerun; a gate-negative check that Berlin page-005
+never triggers this adapter; and a real, non-persisting `matcher._predict()` integration test (same
+`AppTestCase` ephemeral-SQLite pattern as the existing `MatcherIntegrationReadOnlyTests`) proving
+`tier` is never `EXACT_CODE`/`ACTIVE_ALIAS` (no approved alias exists yet) and nothing is written to
+the repository. Focused suite: **31/31** (was 22, net +9 after replacing 1 now-obsolete
+page-058-under-the-wrong-adapter test). Full suite:
+`tests.test_automation tests.test_core tests.test_matching tests.test_matching_behavioral_revert_check
+tests.test_matching_integration tests.test_page_extraction tests.test_product_review tests.test_system`
+→ **194/194 OK** (was 185, zero regressions in Berlin/Unison/Medline or any other suite).
+
+**Revert-check (non-vacuous, real AssertionError/TypeError, not ImportError):** temporarily forced
+`_community_pharmacy_code_table_rows` to return `([], [])` unconditionally (backed up the real file
+first, restored byte-for-byte after) and reran the new test class: `extraction_strategy` came back
+`'MULTILINE_BLOCK'` instead of `'COMMUNITY_PHARMACY_CODE_TABLE'`, `description`/`supplier_sku`/
+`quantity` came back `None` causing real `TypeError: 'NoneType' object is not subscriptable` on 5 of
+the 10 tests and two direct `AssertionError`s on the rest -- 7 failures/errors total, confirming these
+tests exercise the real fix. Restored the file, reran the full new test class: 31/31 again.
+
+**Artifact regenerated (gitignored, `ocr_runs_staging/realinv_20260820T040631Z/page-extraction-bundle.v1.json`):**
+`{"page_count": 10, "table_found_pages": 4, "row_count": 14, "review_required_rows": 8}` (was 9 before
+this change -- page-058's own review-required count dropped from 2 to 1, since row 2 now has zero
+quarantine reasons; row count per page is unchanged at 14 total, only page-058's content quality
+changed from 2 empty rows to 2 real CODIPHEN rows). Rebuilt via the existing, unmodified
+`scripts/build_slice4_page_artifact.py` (read-only OCR run, ephemeral local SQLite, pure
+`matcher._predict()` only, asserts zero persisted documents before writing the artifact) --
+`page_number 58` in the fresh artifact: row 1 `CODIPHEN TABLET(XIOS)` / sku `32132` / matcher
+`UNRESOLVED`; row 2 `CODIPHENTABLET(XIOS)` / sku `None` (genuinely absent from this row's own real
+evidence, not guessed) / matcher `UNRESOLVED`.
+
+**Browser verification (Chrome DevTools MCP against a fresh local staging server,
+`ocr_runs_staging/slice4_cp_adapter_visual/serve.py`, gitignored):** uploaded the regenerated
+artifact and `page-058.png` through the existing file-picker UI (had to stage both files inside this
+session's permitted MCP filesystem roots first -- the OCR-inbound worktree itself is outside the
+chrome-devtools tool's own allowed upload roots in this environment; files were copied, uploaded, then
+the temporary copies' role ended, no repo files were affected). Confirmed on page 5: five Berlin
+overlays/rows render correctly (regression check). Jumped to page 58: title reads
+`หน้า 58 · COMMUNITY_PHARMACY_CODE_TABLE`; both CODIPHEN rows render with correct Lot/Mfg/Exp/qty/unit
+and `Matcher: UNRESOLVED`; the real page image shows the actual printed table matching every extracted
+value including the visible `32132` code cell. Hovering overlay 2 set both overlay 2 and row-card 2
+`.active` (bidirectional); clicking row-card 1 set both row-card 1 and overlay 1 `.active` (reverse
+direction confirmed). Zero browser console errors this run. Confirmed via `grep` across
+`web_static/*.{html,js,css}` that no product name (CODIPHEN or any name from any other adapter) is
+hardcoded anywhere in the UI source -- every value rendered is read from the uploaded artifact JSON at
+runtime. Screenshot: `output/playwright/slice4-cp-adapter-page58.png`.
+
+Safety scan pass (`secret_scan: pass`, `ada_query_catalog: pass`, `live_flags_default_off: true`),
+`py_compile` and `git diff --check` clean, HEAD unchanged at `9a4fc81`, nothing staged. No
+production/shared/ADA DB access, no matcher-source modification, no OCR rerun, no migration, no
+commit/push/deploy, no Slice-5 or next-supplier-adapter work. Full report:
+`CANDIDATE_REPORT_COMMUNITY_PHARMACY_ADAPTER.md`. Stopping here for Codex's independent adjudication.
+
+## 37. Senior Developer (Sonnet) — remediation of Codex's 2 BLOCKED findings on §36 (2026-08-21)
+
+**Status: FINAL REMEDIATED CANDIDATE, not sealed.** Base/HEAD unchanged at `9a4fc81`. Both BLOCKED
+findings from Codex's review of §36 fixed, reproduced first, non-vacuously revert-checked, and
+adversarially self-reviewed (plus a genuine, independently-landed GLM 5.2 contribution -- see the
+review-independence note below) before this packet.
+
+**Review chain actually used, stated plainly:** the workflow asked for GLM 5.2 to do bounded
+implementation/probe work first, with Sonnet reviewing. Sonnet did not invoke GLM through any tool
+call available in this session (no matching agent type, no reachable peer session) and initially
+disclosed GLM as unreachable. While Sonnet was mid-remediation, `tests/test_page_extraction.py`
+changed on disk under a shared worktree with a new `CommunityPharmacyGateAdversarialTests` class (4
+tests: a positive control, both gate-negative false-positive probes, and a Lot-row-pairing
+no-theft probe) that Sonnet did not write. This is consistent with GLM 5.2 operating outside Sonnet's
+own tool surface in this environment (a separate process/session Sonnet cannot see via `ListAgents`).
+Sonnet verified these 4 tests by hand (manual row-clustering trace confirmed the no-theft test's
+result is correct, not tautological) before trusting them, confirmed `page_extraction.py`'s own line
+count/function list was untouched by anything else, and is folding this real contribution into the
+final count below. Net effect: the review chain was NOT thinned to Sonnet-only, but Sonnet cannot
+provide GLM's own reasoning/verdict text (only its committed artifact) -- this is disclosed rather
+than assumed away, per the standing instruction to report review independence honestly either way.
+
+**Finding 1 (artifact-builder matcher plumbing) — reproduced, then fixed:** confirmed
+`scripts/build_slice4_page_artifact.py` hardcoded `supplier_code=None`/`supplier_sku=None` for every
+row regardless of what the Community Pharmacy adapter actually extracted. Fixed:
+- `extract_page()` now returns a `canonical_supplier_code` field on every strategy's result --
+  `"SUPPLIER-COMMUNITY-PHARMACY"` (a fixed constant) ONLY on the branch where
+  `_detect_community_pharmacy_table` already confirmed both the real identity marker AND this
+  table's own header; `"UNKNOWN"` on every other branch (Berlin/Unison/Medline/no-table), never
+  derived from `page_number` or the source filename.
+- The builder script reads this field, passes the real code to the matcher only when it is not
+  `"UNKNOWN"` (else `None`, matching the matcher's own documented "no supplier context" behavior),
+  and stamps a new `alias_path_tested` boolean on every row's matcher_result so nothing downstream can
+  claim the exact-supplier-alias path was exercised for an UNKNOWN-supplier page.
+- Per-row `supplier_sku` and `unit_final` are now read from the extraction's own `fields.supplier_sku`
+  / `fields.unit` (never fabricated, never inherited from a sibling row) and passed through to
+  `matcher._predict()` verbatim -- `unit_final`'s canonical uppercase shape is produced by the
+  matcher's own existing `.strip().upper()` (matching.py, unmodified), not re-implemented here.
+
+**Finding 2 (global totals-boundary invariant) — reproduced, then fixed:** Codex's exact probe
+(`below_y=100`, an ordinary token at y=90, a TOTAL token at y=110 chained into the same row cluster)
+reproduced the violation directly: `_find_totals_boundary` returned `90`, i.e. `<= below_y`. Root
+cause: the function clustered the FULL, unfiltered token list (including ineligible tokens with
+`y0 <= below_y`) before taking a matching row's own minimum y0. Fixed by restricting clustering to
+tokens that are already eligible (`y0 > below_y`) before the row-grouping step, so no ineligible token
+can ever pull the boundary back to or below the header. Re-ran the exact probe: now returns `110`.
+Regenerated the real 10-page artifact: identical summary before/after
+(`table_found_pages: 4, row_count: 14`), confirming zero effect on real Berlin/Unison/Medline/
+Community-Pharmacy pages -- this was purely a synthetic-edge-case fix.
+
+**New tests (Sonnet, 9; GLM, 5 -- 14 total, all genuine, none tautological):**
+- `TotalsBoundaryInvariantTests` (1): Codex's exact probe geometry, asserts the return is never
+  `<= below_y`.
+- `ArtifactBuilderBoundaryTests` (6, including 1 added after adversarial review below): imports and
+  calls the REAL `scripts/build_slice4_page_artifact.py`'s `build()` function end to end (not a
+  hand-built matcher line) -- confirms page-58 row 1's `supplier_sku` reaches the written artifact
+  with `alias_path_tested: true`; row 2 (no printed SKU) stays `None`, never inherited from row 1;
+  Berlin page-5 reports `canonical_supplier_code: "UNKNOWN"` and `alias_path_tested: false` on every
+  row; `unit_final` passes through as-extracted (`"box"`, not pre-uppercased); and -- the adversarial
+  addition -- a real approved `(SUPPLIER-COMMUNITY-PHARMACY, "32132")` alias, seeded through the
+  repository's own `record_alias_observation`/`approve_alias` workflow (3 distinct-document
+  observations to reach ELIGIBLE, then approve), is GENUINELY reachable end to end: `tier` resolves to
+  `ACTIVE_ALIAS`, `proposed_product_code` to the real fixture product, `proposed_unit_code` to `BOX`.
+  This proves the plumbing is not merely correctly silent when no alias exists -- it actually resolves
+  one when it does.
+- `CommunityPharmacyAdapterGateFalsePositiveTests` (2, Sonnet): supplier name present with no real
+  column header nearby does not trigger; column header present with no supplier name nearby does not
+  trigger.
+- `CommunityPharmacyGateAdversarialTests` (4, landed via the shared worktree, attributed to GLM 5.2
+  per the disclosure above, verified by hand): a positive control (both conditions present, gate
+  fires) that the two gate-negative tests below depend on to rule out vacuous passes; identity present
+  but header below the distinct-column threshold does not activate; full header present but identity
+  absent does not activate; and a genuine edge case Sonnet had flagged as an open residual risk in the
+  §36 report -- a data row with NO Lot row of its own, immediately followed by a DIFFERENT product's
+  data row (which itself has its own Lot row one row further down) -- correctly leaves the first row's
+  `lot` field `None`/quarantined and does NOT let it steal the second product's Lot. Manually
+  re-traced the row-clustering/pairing logic against this exact synthetic geometry before trusting the
+  test; the result matches the code's actual behavior.
+
+Focused suite: **45/45**. Full suite (`test_automation`, `test_core`, `test_matching`,
+`test_matching_behavioral_revert_check`, `test_matching_integration`, `test_page_extraction`,
+`test_product_review`, `test_system`): **208/208 OK**, zero regressions.
+
+**Important self-correction, found by the same shared-worktree contributor (attributed to GLM per the
+disclosure above) reviewing Sonnet's OWN test coverage, not just the source fix:** a 5th test appeared,
+`BuilderMatcherInputBoundaryTests.test_real_builder_feeds_sku_unit_and_supplier_code_into_predict`,
+which spies on the real `ProductMatcher._predict` call (via `unittest.mock.patch.object`) DURING a
+real `build()` run and asserts the actual arguments `_predict` received, rather than reading the
+written artifact's already-independently-correct extraction fields. Its docstring claimed Sonnet's
+own `ArtifactBuilderBoundaryTests` (6/6) would keep passing even if the builder's `supplier_sku`
+plumbing were reverted to always-`None`, because those tests only ever inspected
+`row["fields"]["supplier_sku"]` (populated by the EXTRACTOR, correct independently of the builder bug)
+and `matcher_result["alias_path_tested"]` (a separate flag), never the actual `line["supplier_sku"]`
+value the builder passed into `_predict()`. Sonnet independently verified this claim: reverted only
+the builder's `supplier_sku` assignment line (leaving `canonical_supplier_code`/`alias_path_tested`
+fixed), reran `ArtifactBuilderBoundaryTests` -- **6/6 still passed**, a real, confirmed gap in Sonnet's
+own coverage. The new spy-based test correctly fails in that state (`AssertionError: None != '32132'`)
+and passes against the real fix. This is disclosed here as a genuine finding against Sonnet's own
+verification, not only against the original source bug -- the review loop caught a reviewer's own
+blind spot, which is exactly what the two-party structure is for.
+
+**Revert-checks (both non-vacuous, real assertion failures, not `ImportError`):**
+- Finding 2: reran the exact probe against the pre-fix logic path -- returned `90` (a real,
+  demonstrable contract violation), confirmed fixed returns `110`.
+- Finding 1: backed up both changed files, reverted the builder script's plumbing to the old
+  hardcoded-`None`/no-`alias_path_tested` shape, reran `ArtifactBuilderBoundaryTests` -- 2 of 5 tests
+  failed with real `AssertionError: False is not true` (`alias_path_tested` false when it should be
+  true), restored the real files byte-for-byte, reran: 6/6 (after the alias-reachability test was
+  added).
+- Finding 1, narrower revert (the self-correction above): reverted ONLY the builder's `supplier_sku`
+  assignment line (kept `canonical_supplier_code`/`alias_path_tested` fixed) -- `ArtifactBuilderBoundaryTests`
+  stayed 6/6 (confirming the gap), `BuilderMatcherInputBoundaryTests` failed with
+  `AssertionError: None != '32132'` (confirming the spy-based test closes it). Restored, reran: 45/45.
+
+**Artifact regenerated (gitignored):** `{"page_count": 10, "table_found_pages": 4, "row_count": 14,
+"review_required_rows": 8}` -- identical to §36's post-fix summary, confirming this round's fixes
+changed matcher-plumbing correctness and a synthetic-edge-case invariant, not real-page row counts.
+Page 58 in the fresh artifact: row 1 `supplier_sku: "32132"`, `alias_path_tested: true`,
+`tier: UNRESOLVED` (no approved alias exists in the packaged local fixture); row 2 `supplier_sku: None`
+(genuinely absent), `alias_path_tested: true`, `tier: UNRESOLVED`.
+
+**Browser verification (Chrome DevTools MCP, fresh server,
+`ocr_runs_staging/slice4_final_review_visual/serve.py`, gitignored):** page 5 (Berlin) re-verified,
+unaffected -- 5 rows, 5 overlays. Page 58 re-verified with the fixed artifact -- identical correct
+rendering to §36's pass, `Matcher: UNRESOLVED` on both rows, hover/click bidirectional highlighting
+reconfirmed in both directions. Zero console errors beyond the known unrelated favicon 404. `grep` for
+every adapter's product names AND `32132`/`SUPPLIER-COMMUNITY-PHARMACY` across
+`web_static/*.{html,js,css}` → no match; nothing hardcoded. Pages 6 and 48 verified via the
+regenerated artifact JSON directly (both `MULTILINE_BLOCK`, `canonical_supplier_code: "UNKNOWN"`,
+`alias_path_tested: false` on every row, unchanged from §36) -- not re-opened in the browser this
+round because this session's Chrome DevTools MCP `upload_file` tool accepts one file path per call
+(each call replaces an input's file list), making a true multi-image batch upload impractical; this
+limitation is disclosed rather than glossed over. Screenshot:
+`output/playwright/slice4-final-candidate-page58.png`.
+
+Safety scan pass, `py_compile`/`node --check`/`git diff --check` clean, HEAD unchanged at `9a4fc81`,
+nothing staged. No production/shared/ADA DB access, no matcher-source modification, no OCR rerun, no
+migration, no commit/push/deploy, no Woothi/DKSH/Charoon adapter work. Full packet: this section plus
+`CANDIDATE_REPORT_COMMUNITY_PHARMACY_ADAPTER.md` (OLD/NEW matrix and manifest carried forward from
+§36, both findings now closed). Stopping here -- FINAL REMEDIATED CANDIDATE, awaiting Codex's
+independent re-adjudication.
