@@ -253,13 +253,58 @@ _FUZZY_GENERIC_EVIDENCE_TOKENS = frozenset(
 )
 
 
+# Thai is written WITHOUT word spaces, so `normalize_product_text` cannot split
+# a Thai run into words the way it does for Latin -- a whole Thai phrase arrives
+# as ONE agglutinated token. Requiring exact token equality there is therefore
+# not "strict", it is simply wrong: the master name "ยาพาราเซตามอล" (ya- =
+# "medicine" prefix) and the invoice's "พาราเซตามอล" are the same drug and share
+# no exact token. Latin tokens are already whitespace-separated words, so they
+# stay on exact equality -- which is what keeps a fused "CODIPHENTABLET" from
+# matching "CODIPHEN" by containment before the B2 split has run.
+_MIN_THAI_CONTAINMENT_LEN = 4
+
+# `normalize_product_text` rewrites Thai SARA AM (U+0E33 "ำ") into its decomposed
+# NIKHAHIT+SARA AA form, so a stopword written the composed way can never equal a
+# token that has been through the normalizer ("ยาน้ำ" -> "ยาน้ํา"). The guard
+# below compares NORMALIZED tokens, so it must compare them against NORMALIZED
+# stopwords or the Thai half of its generic-word filter silently does nothing.
+# Scope note: this local set fixes the comparison INSIDE this guard only. The
+# same composed/decomposed mismatch also affects `_THAI_TRADE_NAME_STOPWORDS` as
+# used by `extract_trade_name_tokens`, and `_THAI_DOSAGE_FORM_MAP` as used by
+# `extract_attributes` -- both pre-date this change and are reported as separate
+# findings rather than altered here, because fixing them shifts existing
+# retrieval and contradiction behaviour well beyond this remediation.
+_THAI_TRADE_NAME_STOPWORDS_NORMALIZED = frozenset(
+    normalize_product_text(word) for word in _THAI_TRADE_NAME_STOPWORDS
+) | _THAI_TRADE_NAME_STOPWORDS
+
+
 def meaningful_shared_tokens(source_normalized: str, candidate_normalized: str) -> set[str]:
     """Trade-name tokens present on BOTH sides, excluding generic dosage-form,
     packaging, and furniture words. A non-empty result is the minimum evidence
-    the fuzzy tier needs before it may propose a product at all."""
+    the fuzzy tier needs before it may propose a product at all.
+
+    Latin: exact token equality. Thai: exact equality OR containment of one
+    agglutinated run inside the other (see `_MIN_THAI_CONTAINMENT_LEN`), because
+    Thai has no word boundaries to tokenize on.
+    """
     source = set(extract_trade_name_tokens(source_normalized)) - _FUZZY_GENERIC_EVIDENCE_TOKENS
     candidate = set(extract_trade_name_tokens(candidate_normalized)) - _FUZZY_GENERIC_EVIDENCE_TOKENS
-    return source & candidate
+    shared = source & candidate
+    for source_token in source - shared:
+        if detect_script(source_token) != "THAI":
+            continue
+        for candidate_token in candidate - shared:
+            if detect_script(candidate_token) != "THAI":
+                continue
+            shorter, longer = sorted((source_token, candidate_token), key=len)
+            if (
+                len(shorter) >= _MIN_THAI_CONTAINMENT_LEN
+                and shorter in longer
+                and shorter not in _THAI_TRADE_NAME_STOPWORDS_NORMALIZED
+            ):
+                shared.add(shorter)
+    return shared
 
 
 def within_edit_distance_one(a: str, b: str) -> bool:

@@ -211,5 +211,85 @@ class CodiphenFalsePositiveIntegrationTests(unittest.TestCase):
         self.assertEqual(prediction["proposed_product_code"], "IC-002993")
 
 
+class ThaiUnspacedEvidenceTests(unittest.TestCase):
+    """B1 regression -- found during Active Tech Lead self-review of this very
+    candidate, NOT by an independent reviewer.
+
+    The first version of the B1 guard required EXACT token equality on both
+    sides. Thai is written without word spaces, so `normalize_product_text`
+    delivers a whole Thai phrase as one agglutinated token: the invoice's
+    "พาราเซตามอล" and the master's "ยาพาราเซตามอล" (ya- = "medicine") are the
+    same drug and share no exact token. A correct Thai match that scored 0.9474
+    was being turned into UNRESOLVED -- a false NEGATIVE that pushes work back
+    onto humans, which is the opposite of the north-star metric.
+    """
+
+    def test_thai_prefix_difference_still_counts_as_evidence(self):
+        source = normalize_product_text("พาราเซตามอล 500 มก")
+        candidate = normalize_product_text("ยาพาราเซตามอล 500 มก")
+        # The exact-equality intersection is genuinely empty ...
+        self.assertEqual(
+            set(matching.extract_trade_name_tokens(source)) & set(matching.extract_trade_name_tokens(candidate)),
+            set(),
+        )
+        # ... so containment is what has to carry this case.
+        self.assertEqual(meaningful_shared_tokens(source, candidate), {"พาราเซตามอล"})
+
+    def test_unrelated_thai_drugs_are_still_not_evidence(self):
+        source = normalize_product_text("พาราเซตามอล 500 มก")
+        candidate = normalize_product_text("ยาแก้แพ้ เซทิริซีน 10 มก")
+        self.assertEqual(meaningful_shared_tokens(source, candidate), set())
+
+    def test_short_thai_runs_do_not_qualify_by_containment(self):
+        # Below _MIN_THAI_CONTAINMENT_LEN a containment hit is noise, not evidence.
+        self.assertGreaterEqual(matching._MIN_THAI_CONTAINMENT_LEN, 4)
+        source = normalize_product_text("ยาน้ำ")
+        candidate = normalize_product_text("ยาน้ำเชื่อมแก้ไอ")
+        self.assertEqual(meaningful_shared_tokens(source, candidate), set())
+
+    def test_latin_containment_is_still_refused(self):
+        # This is what keeps the mandated staged proof intact: guard-only must
+        # leave the FUSED CODIPHENTABLET row UNRESOLVED, so Latin must NOT match
+        # by containment before the B2 split has run.
+        source = normalize_product_text("CODIPHENTABLET(XIOS)")
+        candidate = normalize_product_text("CHUMCHON CODIPHEN DIPHENHYDRAMINE 50 MG 10 S")
+        self.assertEqual(meaningful_shared_tokens(source, candidate), set())
+
+
+class ThaiFuzzyEndToEndTests(unittest.TestCase):
+    """The same regression proved through the real matcher, not just the helper."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._temp = tempfile.TemporaryDirectory(prefix="ocr-trackb-thai-")
+        cls.profile = build_profile("staging", Path(cls._temp.name))
+        rows = [
+            _row("IC-009001", "ยาพาราเซตามอล 500 มก", None, None, "แผง"),
+            _row("IC-009002", "ยาแก้แพ้ เซทิริซีน 10 มก", None, None, "แผง"),
+        ]
+        refresh_master_cache(cls.profile, session=FakePgSession(rows=rows), min_products=1, max_products=10)
+        from ocr_inbound.service import Application
+
+        cls.app = Application.bootstrap(data_root=cls.profile.root)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._temp.cleanup()
+
+    def test_thai_line_whose_master_name_carries_a_ya_prefix_still_resolves(self):
+        line = {
+            "id": "THAI-LINE",
+            "supplier_sku": None,
+            "description_final": "พาราเซตามอล 500 มก",
+            "raw_ocr_text": "พาราเซตามอล 500 มก",
+            "unit_final": "แผง",
+            "evidence_json": "{}",
+        }
+        prediction = self.app.matcher._predict({"id": "THAI", "supplier_code": "X"}, line, {})
+        self.assertEqual(prediction["proposed_product_code"], "IC-009001")
+        self.assertEqual(prediction["tier"], "FUZZY_SUGGESTION")
+        self.assertTrue(prediction["provenance"]["human_confirmation_required"])
+
+
 if __name__ == "__main__":
     unittest.main()
