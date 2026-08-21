@@ -14,6 +14,7 @@ from .errors import DomainError
 from .identity import IdentityProvider, StagingIdentityProvider
 from .matching import ProductMatcher
 from .ocr_adapter import ExistingOcrPipelineAdapter, VersionedOcrArtifactImporter
+from .product_review import ProductReviewService
 from .structured_log import StructuredLogger
 from .validation import InvoiceValidationService
 
@@ -32,9 +33,11 @@ class Application:
     ocr_importer: VersionedOcrArtifactImporter
     logger: StructuredLogger
     startup_recovery: dict
+    is_admin: bool = False
+    csrf_token: str = ""
 
     @classmethod
-    def bootstrap(cls, *, environment: str = "staging", data_root: Path | None = None, reviewer_id: str = "staging-reviewer") -> "Application":
+    def bootstrap(cls, *, environment: str = "staging", data_root: Path | None = None, reviewer_id: str = "staging-reviewer", is_admin: bool = False) -> "Application":
         profile = build_profile(environment, data_root)
         if environment != "staging":
             raise DomainError("PRODUCTION_ACTIVATION_BLOCKED", "This build goal authorizes staging only")
@@ -51,7 +54,12 @@ class Application:
         validator = InvoiceValidationService(repository, cache)
         logger = StructuredLogger(profile.logs / "application.ndjson")
         automation = AdaOrchestrator(profile, repository, artifacts, validator)
-        return cls(profile, identity, repository, artifacts, cache, matcher, validator, automation, ExistingOcrPipelineAdapter(), VersionedOcrArtifactImporter(), logger, startup_recovery)
+        import secrets
+        return cls(profile, identity, repository, artifacts, cache, matcher, validator, automation, ExistingOcrPipelineAdapter(), VersionedOcrArtifactImporter(), logger, startup_recovery, is_admin, secrets.token_urlsafe(24))
+
+    @property
+    def product_review(self):
+        return ProductReviewService(self)
 
     @property
     def actor(self):

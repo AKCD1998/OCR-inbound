@@ -35,6 +35,12 @@ def make_handler(app: Application):
                 raise DomainError("REQUEST_TOO_LARGE", "Request body exceeds 50 MiB")
             return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
 
+        def _require_admin(self, *, csrf=False):
+            if not app.is_admin or self.headers.get("X-OCR-Actor") != app.actor.actor_id:
+                raise DomainError("ADMIN_REQUIRED", "Authenticated admin access required")
+            if csrf and self.headers.get("X-CSRF-Token") != app.csrf_token:
+                raise DomainError("CSRF_INVALID", "Valid CSRF token required")
+
         def do_GET(self):  # noqa: N802
             try:
                 parsed = urlparse(self.path)
@@ -44,11 +50,25 @@ def make_handler(app: Application):
                 if parsed.path == "/api/health": return self._json(app.system_health())
                 if parsed.path == "/api/documents": return self._json(app.repository.list_documents())
                 if parsed.path == "/api/workspace": return self._json(app.workspace(parse_qs(parsed.query).get("document_id", [""])[0]))
+                if parsed.path == "/api/admin/product-review":
+                    self._require_admin()
+                    return self._json(app.product_review.queue(parse_qs(parsed.query).get("document_id", [""])[0]))
+                if parsed.path == "/api/admin/product-review/exceptions":
+                    self._require_admin()
+                    return self._json(app.product_review.exceptions(parse_qs(parsed.query).get("document_id", [""])[0]))
+                if parsed.path == "/api/admin/product-master/search":
+                    self._require_admin()
+                    return self._json(app.product_review.search_master(parse_qs(parsed.query).get("q", [""])[0]))
+                if parsed.path == "/api/admin/session":
+                    self._require_admin()
+                    return self._json({"actor_id": app.actor.actor_id, "csrf_token": app.csrf_token, "role": "ADMIN"})
                 if parsed.path == "/api/source":
+                    if not app.is_admin or parse_qs(parsed.query).get("token", [""])[0] != app.csrf_token:
+                        raise DomainError("SOURCE_ACCESS_DENIED", "Authorized review image token required")
                     document = app.repository.get_document(parse_qs(parsed.query).get("document_id", [""])[0])
-                    source = app.profile.assert_within_root(app.profile.root / document["source_artifact_path"], "Source artifact")
+                    source = app.product_review.source_path(document["id"])
                     data = source.read_bytes(); mime = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
-                    self.send_response(200); self.send_header("Content-Type", mime); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
+                    self.send_response(200); self.send_header("Content-Type", mime); self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'none'; object-src 'none'; sandbox"); self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
                 self.send_error(404)
             except DomainError as exc: self._json(exc.as_dict(), 400)
             except Exception: self._json({"code":"INTERNAL_ERROR","message":"Unexpected local server failure"}, 500)
@@ -56,6 +76,12 @@ def make_handler(app: Application):
         def do_POST(self):  # noqa: N802
             try:
                 body = self._body(); path = urlparse(self.path).path
+                if path == "/api/admin/product-review/decision":
+                    self._require_admin(csrf=True)
+                    return self._json(app.product_review.decide(body, app.actor))
+                if path == "/api/admin/product-review/alias/activate":
+                    self._require_admin(csrf=True)
+                    return self._json(app.repository.approve_alias(body["alias_id"], app.actor))
                 if path == "/api/golden":
                     fixture = body["fixture"]; root = repository_root()/"tests"/"fixtures"/"ocr_top3"/fixture
                     result = app.import_artifact(root/"invoice.svg", root/"artifact.json"); document_id=result["document"]["id"]
