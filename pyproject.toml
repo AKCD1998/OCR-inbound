@@ -4,6 +4,13 @@ version = "0.1.0"
 requires-python = ">=3.11,<3.12"
 dependencies = []
 
+# The staging app itself is standard-library only. The read-only product-master
+# cache refresh is the ONE operator-driven path that needs a database driver, so
+# it is an extra rather than a hard dependency -- installing the app must not
+# start requiring a Postgres driver for reviewers who never refresh.
+[project.optional-dependencies]
+master-refresh = ["pg8000>=1.31,<2.0"]
+
 [tool.ocr-inbound]
 ui = "local-web"
 environment = "staging"

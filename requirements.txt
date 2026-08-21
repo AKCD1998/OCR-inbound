@@ -14,3 +14,13 @@ easyocr>=1.7.0
 pdfplumber>=0.11.0
 camelot-py[cv]>=0.11.0
 openai>=1.50.0
+
+# --- Slice 5 read-only product-master cache refresh --------------------------
+# Operator-only, and imported lazily inside master_cache.default_connect(): the
+# packaged staging app, the matcher, and the whole test suite run without it
+# (tests inject a fake session). Present here so a FRESH machine that has to run
+# `python -m ocr_inbound master-cache-refresh` installs a driver instead of
+# discovering MASTER_REFRESH_DRIVER_MISSING at refresh time. Ranged, not pinned:
+# 1.31 is the floor that returns SHOW/SELECT rows as lists (master_cache handles
+# both shapes) and <2.0 keeps the next major out until it is retested.
+pg8000>=1.31,<2.0

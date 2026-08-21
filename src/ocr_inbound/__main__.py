@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .ada_automation import SubprocessAdaDriver
+from .config import build_profile
 from .errors import DomainError
 from .service import Application
 from .web import serve
@@ -22,6 +23,10 @@ def parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8876)
     serve_parser.add_argument("--no-browser", action="store_true")
+    refresh_parser = sub.add_parser("master-cache-refresh", help="Read-only refresh of the LOCAL product-master cache from production Postgres (explicit staging operator action)")
+    refresh_parser.add_argument("--min-products", type=int, default=5000, help="Safety band lower bound (default 5000)")
+    refresh_parser.add_argument("--max-products", type=int, default=10000, help="Safety band upper bound (default 10000)")
+    sub.add_parser("master-cache-status", help="Show local ada_cache.db provenance, counts, and health")
     import_parser = sub.add_parser("import", help="Import a PDF/image with a reviewed versioned OCR artifact")
     import_parser.add_argument("--source", type=Path, required=True)
     import_parser.add_argument("--artifact", type=Path, required=True)
@@ -41,6 +46,18 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command in {"master-cache-refresh", "master-cache-status"}:
+            if args.environment != "staging":
+                raise DomainError("MASTER_REFRESH_STAGING_ONLY", "Master cache commands are staging-only in this slice")
+            from . import master_cache
+
+            profile = build_profile(args.environment, args.data_root)
+            if args.command == "master-cache-refresh":
+                result = master_cache.refresh_master_cache(profile, min_products=args.min_products, max_products=args.max_products)
+            else:
+                result = master_cache.status_master_cache(profile)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         app = Application.bootstrap(environment=args.environment, data_root=args.data_root, reviewer_id=args.reviewer, is_admin=args.admin)
         command = args.command or "serve"
         if command == "serve":
