@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  # Every BRANCH push runs CI directly -- including branches with no pull
+  # request yet. The "**" glob matches all branches but NOT tag pushes.
+  # A push to a branch that ALSO has an open PR produces TWO runs by design
+  # (push run on the branch head + PR run on the merge commit); they never
+  # cancel each other -- see the concurrency note below.
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Least privilege: these gates only read the checked-out tree. They never push,
+# comment, release, or touch packages, so the default token scope (which can be
+# read-write depending on repository settings) is narrowed here explicitly.
+permissions:
+  contents: read
+
+# Duplicate handling, per Codex verdict (2026-08-21): push runs and
+# pull_request runs are NEVER allowed to cancel each other -- the PR run
+# executes against the merge commit (coverage a plain push cannot provide),
+# so a duplicate pair is accepted on purpose. Concurrency groups therefore
+# separate BOTH the event type and the identity:
+#   - pull_request -> workflow + event_name + PR number
+#   - push         -> workflow + event_name + branch ref
+# cancel-in-progress only ever supersedes an OLDER run of the SAME pull
+# request (a new synchronize) or the SAME branch (a new push).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Five gates (windows-latest)
+    # WINDOWS ONLY, and that is a product decision, not an omission.
+    # ada_automation.py acquires a Windows NAMED MUTEX and raises
+    # MUTEX_PLATFORM_UNSUPPORTED ("Windows named mutex is required") anywhere
+    # else, so the ADA automation path cannot run on Linux at all. The first CI
+    # run proved it: ubuntu-latest produced 21 errors, every single one that
+    # same mutex, with nothing else broken. This matches the authorized MVP
+    # topology in docs/PROJECT_BIBLE.md section 9.1 -- "one Windows workstation
+    # per ADA instance". Do not re-add a Linux leg without first making the
+    # mutex cross-platform; a green Linux job is not a goal of this project.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # bash is available on the Windows runner image and accepts the
+        # `PYTHONPATH=src <cmd>` prefix form used by the verified commands;
+        # the runner default (pwsh) does not.
+        shell: bash
+    env:
+      # The runner's stdout defaults to cp1252, and gate 5 prints UTF-8 output
+      # captured from a packaged subprocess. Without this the first CI run died
+      # with UnicodeEncodeError: 'charmap' codec can't encode character
+      # '\u0e1c'. This makes the runner behave like the developer consoles the
+      # gates were verified on; it changes no product code.
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The suite is standard-library only (verified: the full suite passes on
+      # a clean 3.11.9 interpreter with nothing installed). There is deliberately
+      # NO pip install step: requirements.txt is the heavy OCR Layers A-E
+      # toolchain (torch/paddle/opencv/easyocr) that nothing in these gates
+      # imports, and pg8000 is the lazily-imported, operator-only master-cache
+      # dependency that CI must not exercise.
+
+      - name: Gate 1 - compile all sources (src, tests, scripts)
+        run: python -m compileall -q src tests scripts
+
+      # EXPECTED COUNT ON CI -- verified against a clean `git archive HEAD`
+      # checkout (2026-08-21): "Ran 249 tests ... OK (skipped=13)".
+      # Accounting: the pre-safety-scan clean baseline was 241; this change
+      # adds the 8 tests in tests/test_safety_scan.py (241 + 8 = 249). The 13
+      # skips are stable across both numbers. A developer with the real
+      # evaluation run on disk sees 274. The 25-test local-vs-clean delta
+      # (all in tests/test_page_extraction.py, all gated on the gitignored
+      # ocr_runs_staging/ evidence) breaks down as:
+      #   - 3 classes skip in setUpClass (BerlinPage5 10 members,
+      #     CommunityPharmacyAdapterRealPage 9, ArtifactBuilderBoundary 6) --
+      #     unittest counts each skipped CLASS as one "skipped" entry and does
+      #     not enumerate its members, which is why "Ran" drops by 25 but
+      #     "skipped" only shows 3 of them;
+      #   - 10 more tests call _skip_if_missing() at method level and are
+      #     counted individually.
+      #   3 class entries + 10 method entries = skipped=13. This is by design,
+      # not lost coverage: the real-evidence run is gitignored on purpose. If
+      # the CI numbers change for ANY other reason, treat it as a regression.
+      - name: Gate 2 - full unittest suite (stdlib only)
+        run: PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -t .
+
+      # The scan covers git-tracked source-like files in src/, scripts/,
+      # tests/, docs/ and resources/ plus root-level Python/PowerShell/JS/
+      # config files; it ignores .git, .venv/venv, output/, environments/,
+      # generated OCR artifacts, caches, binaries and images. There is NO
+      # suppression mechanism: any finding, anywhere, fails this gate (fake
+      # credentials in tests must be assembled from runtime fragments, as
+      # tests/test_master_cache.py now does).
+      - name: Gate 3 - safety scan (secrets, read-only catalog, live flags off)
+        run: PYTHONPATH=src python scripts/safety_scan.py
+
+      - name: Gate 4 - build staging zipapp
+        run: python scripts/build_staging.py
+
+      - name: Gate 5 - package smoke (loopback bind + packaged worker subprocess)
+        run: python scripts/package_smoke.py

@@ -1662,3 +1662,245 @@ migration, no commit/push/deploy, no Woothi/DKSH/Charoon adapter work. Full pack
 `CANDIDATE_REPORT_COMMUNITY_PHARMACY_ADAPTER.md` (OLD/NEW matrix and manifest carried forward from
 §36, both findings now closed). Stopping here -- FINAL REMEDIATED CANDIDATE, awaiting Codex's
 independent re-adjudication.
+## 38. Senior Developer / acting Tech Lead (Sonnet) — Slice 5 master cache, Track B matcher remediation, Thai regression, and first CI (2026-08-21)
+
+**Status: SEALED on the Draft PR branch, NOT independently reviewed.** Branch
+`slice5/master-cache-matcher-safety-2026-08-21`, PR #3 left Draft on purpose. Base `f28bb7e`.
+Commits added this session: `4b5e185` (Codex-authored/pushed), `92ba315`, `d7a5ded`, `49d7422`
+(Sonnet), plus `b7fbd72` (Codex, CI hardening). No commit was ever amended, reverted, rebased, or
+force-pushed; `main` never moved.
+
+**Authority chain, stated plainly.** This session began with no seal/push rights and produced a
+candidate report only. The owner then appointed it **Active/acting Tech Lead** (Codex unavailable)
+and later granted standing authority to remediate, test, seal as a *follow-up* commit, and push to
+the feature branch / Draft PR after self-adversarial review — explicitly withholding merge, deploy,
+production write, destructive migration, and any new matcher auto-confirm behaviour, and explicitly
+forbidding amend/force-push. Everything below is **self-review. It is not independent review and must
+not be recorded as one.** Codex's adjudication belongs in §39.
+
+**Provenance of the two Slice-5 files.** `src/ocr_inbound/master_cache.py` and
+`tests/test_master_cache.py` arrived as untracked files with **no git history of any kind** — absent
+from all 9 reachable commits, no stash, single worktree. They are attributed to no one (not Codex,
+not GLM, not Sonnet), and every claim about them was re-derived from the files themselves rather than
+from any prior report.
+
+**Slice 5 — six defects reproduced before editing, then remediated.** A1: the internally-created
+pg8000 connection was never closed on any path (the only `close` calls were `os.close`/sqlite), while
+`_build_candidate`'s docstring falsely asserted "the production connection is already closed by the
+time this runs". Ownership is now explicit — an injected session stays caller-owned and is never
+closed; a session opened by `default_connect()` is closed on success and on every failure including
+guard failures, and close failures are swallowed *without their message* because driver teardown text
+routinely echoes the DSN. A2: `_build_candidate()` created the `.next` file via `mkstemp` but the
+caller bound `candidate` from the **return value**, so a mid-build failure could never reach caller
+cleanup; a forced failure left `ada_cache.slice5.pz3rwu8w.next` behind. The function now owns and
+unlinks its own candidate on `BaseException` (KeyboardInterrupt included). A3: `pg8000` existed only
+in `.venv` and was declared nowhere — added as `pg8000>=1.31,<2.0` to `requirements.txt` and as a
+`master-refresh` extra in `pyproject.toml`, and `requirements-staging.lock.txt` was corrected because
+it *asserted* the companion was standard-library-only, which pg8000 falsifies (the task spec's file
+list named only `requirements.txt`; declaring it there alone would have left two other files lying).
+A4: `urlparse` leaves userinfo **percent-encoded**, so a password containing `@ / # ? :` — all of
+which must be escaped to keep the URL parseable — authenticated with the wrong string and no
+diagnosable error; `parse_database_url()` now unquotes every userinfo field and the database path.
+A5: the cache wrote `active=1` under the comment "active is not a claim, it is absence of retirement",
+which **invents a retirement state the source has no concept of** — verified against the live schema
+that `ada.branch_stock_snapshots` has **no `is_active` column** (37 columns, none named that).
+`CACHE_ACTIVE_MEANING` now defines it once as "present in the current branch-stock snapshot and
+eligible for staging review matching" and that exact string appears in the code, the cache manifest,
+the status output and the runbook. A6: the runbook had nothing about the refresh; it now documents
+operator setup without literal secrets, both commands, the count band, dependency install,
+no-fallback failure behaviour, a startup-never-refreshes proof, and stale-lock recovery. **Plus one
+found while writing A6:** the refresh lock was an *empty file*, making the stale-lock diagnosis A6
+was supposed to document impossible. It now records `pid=` + UTC start, the error quotes the holder,
+and nothing auto-deletes a lock (PID reuse makes liveness undecidable from the file alone).
+
+**Production access used, and its negative proof.** Read-only against `sc_drug_db` with every
+statement recorded: `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, `ROLLBACK`,
+`BEGIN READ ONLY`, `SHOW transaction_read_only` (verified `on`), `SELECT current_database()`, one
+`SELECT` from `ada.branch_stock_snapshots`, `ROLLBACK`. All in the declared allowlist, zero mutating
+statements, owned connection closed. Verified **6,671 rows / 6,671 distinct `product_code`**, and
+CODIPHEN `IC-001962` and `IC-002993 "BEDSIDE TABLE ABS 1 S"` exactly as specified. The credential
+used was the admin-api `DATABASE_URL`, which is almost certainly read-write — read-only-ness was
+enforced by the transaction guards, not by the role; a dedicated SELECT-only role is what the runbook
+tells operators to use and remains the right production practice. Note also that
+`GATE6_READONLY_DATABASE_URL` in this environment is **stale** (fails SCRAM channel binding on every
+SSL mode and on plaintext); an initial hypothesis that this indicated an `ssl_context=True` driver
+defect was **wrong** and is retracted here — the working credential connects fine with
+`ssl_context=True`, and no SSL change was made.
+
+**Track B — the matcher false positive, reproduced exactly.** Against the real 6,671-row cache via
+pure `_predict()`: `supplier_sku=None`, `CODIPHENTABLET(XIOS)` → **IC-002993 "BEDSIDE TABLE ABS 1 S"
+/ FUZZY_SUGGESTION / 0.5000**, with the full wrong candidate set `IC-002993 0.5000, 630020259 0.4865,
+IC-003530 0.4681, IC-003524 0.4571, IC-002022 0.4528`. Mechanism: the lost space produced the single
+junk token `CODIPHENTABLET`; trade-name and spelling tiers returned nothing; control fell through to
+the whole-catalog character-level `SequenceMatcher` sweep where **any** product scoring ≥ 0.45 was
+promoted straight to `FUZZY_SUGGESTION` with no requirement that a real product token be shared. Two
+separately testable changes followed — B1 `meaningful_shared_tokens()` (a fuzzy candidate needs
+meaningful shared trade-name evidence; generic dosage-form/packaging/furniture overlap such as
+TABLE/TABLET can never qualify alone) and B2 `recover_fused_dosage_form()` (a closed allowlist of
+TABLET/CAPSULE/SYRUP/CREAM/OINTMENT split at most once per token, never dictionary segmentation,
+never touching words ending in `TABLE`). Staged proof on the real cache: pre-fix wrong IC-002993 →
+guard-only **UNRESOLVED, never another product** → guard+recovery **IC-001962 / TRADE_NAME_MATCH /
+0.6500 with human confirmation required**; Row 1 (0.7000) and the clean control (0.8500) unchanged;
+`UNKNOWN TABLET` UNRESOLVED throughout (it was *already* UNRESOLVED pre-fix, so it is a
+regression guard, not a defect reproduction — stated rather than claimed as a fix). Row 2 keeps
+`supplier_sku=None` and `"32132"` never appears in its `source_text`. Thresholds were **not** lowered;
+B1 adds evidence rather than relaxing the bar.
+
+**B1 scope correction worth recording.** The first B1 implementation applied the evidence guard to
+*every* fuzzy-sweep candidate, including runs where a stronger tier had already selected and the sweep
+was merely decorating the reviewer's alternatives list. That broke
+`test_product_review.py::test_reused_request_id_...` (its row dropped from 2 candidates to 1). Rather
+than weaken an existing test, the guard was narrowed to `selected is None` — the case it is actually
+about. Reviewers keep their full correction list on stronger tiers. **No existing test was modified,
+skipped, or deleted anywhere in this session.**
+
+**The Thai regression — shipped in `4b5e185`, caught by this session's own later self-review.** The
+B1 guard as committed required **exact token equality**. Thai is written without word spaces, so
+`normalize_product_text` returns a whole phrase as ONE agglutinated token: the invoice's
+`พาราเซตามอล` and the master's `ยาพาราเซตามอล` (ya- = "medicine") are the same drug and share no
+exact token. Reproduced on `4b5e185` itself (extracted with `git archive`, working tree untouched):
+a correct match scoring **0.9474 became UNRESOLVED**, rejected with the guard's own reason code
+`FUZZY_INSUFFICIENT_TOKEN_EVIDENCE:1` having refused exactly one candidate — the right one. A false
+negative that pushes work back onto reviewers, i.e. the opposite of Bible §2. `92ba315` fixes it:
+Thai additionally accepts **containment** of one agglutinated run inside another when the contained
+run is ≥ `_MIN_THAI_CONTAINMENT_LEN` (4) and is not a stopword; **Latin deliberately stays on exact
+equality**, because `CODIPHENTABLET` *contains* `CODIPHEN` and containment there would break the
+mandated staged proof (guard-only ⇒ UNRESOLVED). The full OLD/guard-only/FINAL matrix re-runs
+**bit-identical** after the fix. The same commit also fixes a second, smaller defect: SARA AM
+(`ำ` U+0E33) is rewritten by the normalizer into its decomposed form, so three of the 22 composed
+Thai stopword literals (`ยาน้ำ`, `น้ำเชื่อม`, `สำหรับ`) could never equal a normalized token and the
+Thai half of the guard's generic-word filter was silently inert;
+`_THAI_TRADE_NAME_STOPWORDS_NORMALIZED` closes that inside this guard only. **Process failure worth
+recording:** the first candidate report listed Thai as a residual risk and then never tested it. The
+risk was written down and left unexercised, which is how it shipped.
+
+**The generic-token approach: BUILT, MEASURED, REJECTED — do not re-derive it.** The evidence gate is
+still defeated by generic Thai tokens: on the live master `สามัญ` (house-brand prefix) occurs in
+**2,804 of 6,671 products**, `เภสัช` 1,615, `กรัม` — *a unit* — 1,163, `ปกติ` 1,009; 719 of 6,462 Thai
+evidence tokens reach more than five products, and 7,306 containment pairs exist. A line naming a
+product that does not exist is suggested `COKE NO SUGAR 450 ML`. The codebase already had the doctrine
+for exactly this (`_GENERIC_TOKEN_MAX_PRODUCTS = 5`, "too generic to serve as sole retrieval
+evidence") and the gate simply did not apply it, so it was implemented as a sole-evidence rule
+(generic tokens still count *alongside* a specific one, matching how `_trade_name_candidates` uses
+it), went 31/31 green, and closed all three adversarial cases. It was then **removed**, because
+measured on the real master it inverts: on 70 prefix-stripped Thai names, correct recoveries fell
+49 → 47, one correct result became a **wrong product**, and one became UNRESOLVED. Root cause,
+diagnosed on `ถุงมือยางลองเมด สีดำ ไซส์ M 10`: the *correct* product's shared tokens were **all three**
+classified generic — because the Longmed glove family has more than five SKUs — while the *wrong*
+product's vaguer `ถุงมือยาง` stayed "specific" because it is rarer. **Catalog frequency is not
+specificity**; it penalises exactly the multi-SKU families where a token is most diagnostic.
+`_GENERIC_TOKEN_MAX_PRODUCTS` remains sound where it is used today but is the **wrong instrument** as
+a hard sole-evidence filter in this gate. A different mechanism is needed — a curated house-brand/unit
+stopword list, or evidence weighting rather than a binary gate. Full evidence in
+`REMEDIATION_PACKET_THAI_EVIDENCE_FOR_CODEX.md` §12.
+
+**A near-miss vacuous test, disclosed.** While building the rejected approach, an end-to-end test was
+written that returned UNRESOLVED **whether or not the fix was present** — nothing cleared the 0.45
+floor in a 6-row fixture. It was caught, the fixture rebuilt so the reverted code genuinely proposes a
+wrong product at 0.8750, and a companion test added that pins the revert-check inside the suite so it
+cannot silently go vacuous again. Both were removed along with the rejected approach, but the failure
+mode is recorded because it was nearly shipped.
+
+**Corpus probes, including one that measured nothing.** Reachability: products with no usable evidence
+token at all are **6 / 6,671 = 0.09%**, and all six are unspaced Thai runs with digits fused in that
+`extract_trade_name_tokens` already skipped before this change. Targeted fuzzy-path probe (70 real
+Thai names with the leading generic prefix stripped so exact retrieval fails, seed 20260821):
+containment changed **2** outcomes, both `None →` the correct product (0.8889 and 0.9333), with
+**zero** wrong-product transitions; the single row flagged "different product" has `old == new ==
+IC-002485` at TRADE_NAME_MATCH and is therefore a pre-existing trade-name mismatch not attributable to
+the change. **A first attempt sampled 150 *whole* product names and reported "0 changed" — that
+measured nothing**, because whole names resolve via EXACT_NAME/TRADE_NAME before the fuzzy tier ever
+runs; it is superseded and must not be cited as evidence. Sample power is low either way: 70 samples
+produced only 2 transitions, so "zero wrong transitions" should not be trusted as strongly as the
+number suggests.
+
+**Base drift, escalated and resolved.** Mid-session `HEAD` moved from `f28bb7e` to `4b5e185` and a
+branch appeared on origin. This session stopped and escalated rather than proceeding; the owner
+confirmed it was Codex committing under their authorization. Recorded because the report at the time
+flagged it as an anomaly.
+
+**First CI, and what its first run proved.** The repo had **no `.github/` at all**. GLM 5.2 was given
+a bounded task (workflow file only, no commit/push rights, explicitly barred from `matching.py`); its
+report was verified against the real tree rather than accepted, and it had omitted
+`permissions: contents: read` and a `concurrency` group, which were added. Five gates: compileall,
+full unittest with `-W error::ResourceWarning`, safety_scan, zipapp build, package smoke, with
+**no pip install step at all** — the suite is standard-library-only, verified by running it green on
+a clean 3.11.9 interpreter with nothing installed; `requirements.txt` is the heavy Layers A–E
+toolchain nothing in these gates imports, and pg8000 is the lazily-imported operator-only dependency
+CI must never exercise. The zipapp is **not byte-reproducible** (two builds of identical source give
+different SHA-256), so no build hash is asserted. The first run was red on both legs and both
+failures were real information. **ubuntu-latest was a specification error by this session, not an
+implementation error by GLM:** 21 errors, every one `MUTEX_PLATFORM_UNSUPPORTED — Windows named mutex
+is required` (`ada_automation.py:272`), nothing else broken, matching Bible §9.1 "one Windows
+workstation per ADA instance"; a Linux leg was requested for a product that cannot run on Linux, and
+it was removed with the reason recorded in the file. **windows-latest gate 5** died with
+`UnicodeEncodeError: 'charmap' codec` because the runner's stdout is cp1252 while `package_smoke`
+prints UTF-8 captured from a subprocess; fixed with `PYTHONUTF8=1` at CI level, no product code
+touched. **A test-count discrepancy was nearly waved through:** CI reported 241 run / 13 skipped
+against 266 locally. A CI silently collecting fewer tests is a dangerous signal, so it was chased —
+the ten test modules sum to exactly 266, all are tracked, none are gitignored, and the 25-test gap is
+entirely Slice-4 tests reading the gitignored `ocr_runs_staging/` evidence. Expected, not lost
+coverage; the expected numbers are documented in the workflow so a drop for any *other* reason reads
+as a regression.
+
+**CI gaps found after declaring it done — the owner pushed back correctly.** Two were introduced or
+missed by this session and are recorded because `b7fbd72` (Codex) has since hardened both: (1) fixing
+duplicate runs by setting `push: branches:[main]` + `pull_request:` **removed CI from every branch
+with no open PR**, a coverage hole traded for tidiness without saying so; (2) gate 3's secret scan
+only covered `src/`, `scripts/`, `resources/` — a planted `password = "..."` was caught in `src/` and
+**passed clean in `tests/`**, leaving `tests/` (12 files), `docs/` (16) and every root file including
+`fusion_review_server.py`, `ocr_feasibility.py`, `ocr_environment.py` and `run_staging.ps1`
+unscanned. Still open at the time of writing: CI validates the **merge commit**, not the branch
+commits (`HEAD is now at 43475ba Merge 49d7422 into f28bb7e`), equivalent only while `main` has not
+moved; **no branch protection** (`/branches/main/protection` → 404), so a green tick is advisory and
+nothing blocks merging red — owner action, not this session's to take; 25 Slice-4 tests never run in
+CI; and no lint/type/actionlint. **The most important limitation: this CI cannot catch the class of
+bug this entire session was about.** Every gate runs against fixtures; the Thai regression, the
+CODIPHEN false positive and the generic-token hole all required the real 6,671-row master, which CI
+has no access to and should not have. Green CI says almost nothing about matcher correctness and may
+give more false confidence than no CI.
+
+**Matcher findings left OPEN for Codex (all in `matching.py`).** (a) The generic-token hole above is
+**mostly pre-existing in `4b5e185`** — `สามัญ ของที่ไม่มีอยู่จริง` → IC-003109 EAR PICKER 0.4783 and
+`ผงไม่มีจริง 5 กรัม` → 630030194 MYDA B CREAM 0.5263 behave identically before and after `92ba315` —
+but `92ba315` **worsens one of three** adversarial cases, `สามัญ ZZZQQ ไม่มีสินค้านี้` moving from
+UNRESOLVED to IC-000027 `COKE NO SUGAR 450 ML` 0.5091. This was accepted as a documented residual
+risk because real OCR text dominates adversarial text (+2 correct / 0 wrong there) and because the
+obvious fix inverts — **this is the single judgement call Codex should most consider overturning.**
+(b) Three Thai stopwords remain dead in `extract_trade_name_tokens` itself (same SARA AM mismatch);
+measured blast radius on the real master is **0 products**, so it is a correctness tidy-up with almost
+no behavioural value. (c) `matching.py:896` passes *normalized* text to `extract_attributes` while
+candidate attributes come from *raw* master names, so Thai SYRUP contradictions are missed — deeper
+than it looks, because `_THAI_DOSAGE_FORM_RE = [ก-๙]+` grabs maximal runs and `ยาเม็ด` /
+`ยาน้ำแก้ไอ` never match the map at all; only an isolated `ยาน้ำ` does. A Thai syrup line can
+therefore be matched to a tablet product without the contradiction guard blocking it. Fixing it
+changes a guard that *blocks* matches, so it needs corpus measurement first. **Unifying observation:**
+(a), (b) and (c) share one root cause — Thai is unspaced, so exact-token lookups against Thai word
+lists barely ever fire. They are better resolved as one "Thai tokenization strategy" decision than as
+three patches.
+
+**Verification.** Full suite **266/266** locally under `-W error::ResourceWarning` (241 run / 13
+skipped on a clean CI checkout, explained above), focused `test_master_cache` 34/34, focused
+`test_matcher_false_positive_remediation` 24/24, **7/7 revert-checks NON-VACUOUS** with zero
+ImportError/AttributeError (a revert that only produces an ImportError was never counted), safety_scan
+pass, `compileall`, `git diff --check`, zipapp build and package smoke all pass, and the whole suite
+also passes on a clean interpreter with no third-party package present. Dependency resolvability was
+proven from a real index (`pip download "pg8000>=1.31,<2.0" --no-deps`), not from the existing venv,
+and the fresh-machine path was simulated by blocking the import so the refresh fails loudly with
+`MASTER_REFRESH_DRIVER_MISSING` while import/review/Ready/packaged build keep working; the zipapp
+bundles no third-party package. Zero predictions, aliases or decisions were persisted by any probe
+(`_predict()` only, never `predict_and_persist()`), and startup never auto-refreshes — neither
+`ocr_inbound.master_cache` nor `pg8000` appears in `sys.modules` after importing the app or after
+`Application.bootstrap`.
+
+**Not done, explicitly.** No merge, no deploy, no production write, no destructive migration, no
+schema/migration change, no Render or environment-variable change, no repo-settings or
+branch-protection change, no alias created or approved, no auto-confirm behaviour opened, no amend,
+no force-push, no history rewrite. PR #3 left Draft; `main` untouched at `f28bb7e`. Pre-existing
+untracked user files (`.playwright-cli/`, `environments/`, `output/`,
+`docs/HANDOFF_SLICE2_TO_NEXT_SESSION_TH.md`) preserved byte-untouched, and a pre-existing orphan
+`ocr_runs_staging/realinv_20260820T040631Z/ada_cache.yux6jx3o.next` was left in place. Supporting
+packets: `CANDIDATE_REPORT_SLICE5_CACHE_AND_MATCHER_REMEDIATION.md` (§15 self-review pass, §16
+base-drift record), `REMEDIATION_PACKET_THAI_EVIDENCE_FOR_CODEX.md` (§12 the rejected dead end) and
+`HANDOFF_TO_CODEX_TECH_LEAD_2026-08-21.md`. Stopping here — **awaiting Codex independent
+adjudication in §39.**

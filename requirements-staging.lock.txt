@@ -1,4 +1,14 @@
 # OCR Inbound staging companion runtime lock
 # Python: CPython 3.11.x on Windows
-# Third-party packages: none (standard-library runtime and build only)
+# Third-party packages at RUNTIME: none. The staging app, the review UI, the
+# matcher, the packaged zipapp, and the whole test suite import standard library
+# only, and `scripts/package_smoke.py` proves the packaged build runs with no
+# third-party package installed.
+#
+# ONE optional operator extra exists (Slice 5): `pg8000>=1.31,<2.0`, imported
+# lazily by `ocr_inbound.master_cache.default_connect` and needed ONLY to run
+# `python -m ocr_inbound master-cache-refresh` against the read-only production
+# snapshot. Without it that one command fails loudly with
+# MASTER_REFRESH_DRIVER_MISSING; nothing else in the product changes. Install it
+# with `pip install -r requirements.txt` or `pip install .[master-refresh]`.
 # Existing OCR Layers A-E remain governed by requirements.txt and their external toolchain.

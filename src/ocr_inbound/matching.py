@@ -187,6 +187,137 @@ def extract_trade_name_tokens(normalized_text: str) -> list[str]:
     return ordered
 
 
+# --- B2: fused dosage-form suffix recovery -----------------------------------
+# A real Community Pharmacy invoice line lost the space between the trade name
+# and the dosage form: `CODIPHENTABLET(XIOS)`. Tokenizing that yields the single
+# junk token "CODIPHENTABLET", which matches no product, so retrieval fell all
+# the way through to the character-level fuzzy sweep and proposed an unrelated
+# product. Splitting a KNOWN dosage-form suffix back off restores the real trade
+# name token ("CODIPHEN") without inventing anything.
+#
+# This is deliberately NOT dictionary segmentation. It is a closed allowlist of
+# dosage forms, applied at most once per token, and it only fires when the
+# remaining prefix is itself long enough to be a legitimate trade-name token.
+# Note what is absent: "TABLE". Splitting generic furniture/packaging words is
+# exactly the failure this whole change exists to prevent, so "BEDSIDETABLE" and
+# "VEGETABLE" are left alone -- only "TABLET" (the dosage form) is recoverable.
+_FUSED_DOSAGE_FORM_SUFFIXES = ("TABLET", "CAPSULE", "OINTMENT", "SYRUP", "CREAM")
+
+
+def recover_fused_dosage_form(normalized_text: str) -> str:
+    """Splits a fused known dosage-form suffix off each token.
+
+    `CODIPHENTABLET` -> `CODIPHEN TABLET`; `BEDSIDETABLE`, `VEGETABLE`,
+    `ICECREAM`, and a bare `TABLET` are all returned unchanged.
+
+    This is MATCHING NORMALIZATION ONLY. It never rewrites OCR evidence: the
+    caller keeps the original `source_text`/`normalized_text` for audit and uses
+    the recovered string purely as a retrieval key.
+    """
+    if not normalized_text:
+        return normalized_text
+    recovered: list[str] = []
+    for word in normalized_text.split():
+        recovered.append(_split_fused_suffix(word))
+    return " ".join(recovered)
+
+
+def _split_fused_suffix(word: str) -> str:
+    if any(character.isdigit() for character in word) or detect_script(word) == "THAI":
+        return word
+    for suffix in _FUSED_DOSAGE_FORM_SUFFIXES:
+        if not word.endswith(suffix) or word == suffix:
+            continue
+        prefix = word[: -len(suffix)]
+        # The prefix must stand on its own as trade-name evidence. Without this,
+        # a short accidental ending would manufacture a bogus token, and the
+        # whole point of the split is to RECOVER a real one.
+        if len(prefix) < _MIN_TRADE_NAME_TOKEN_LEN or prefix in _TRADE_NAME_STOPWORDS:
+            return word
+        # At most one split per token -- no recursive segmentation.
+        return f"{prefix} {suffix}"
+    return word
+
+
+# --- B1: fuzzy-sweep evidence guard ------------------------------------------
+# Tokens that describe a dosage form, a package, or a piece of furniture are
+# shared by hundreds of unrelated products. Character-level SequenceMatcher
+# similarity that rests ONLY on words like these is not product evidence, it is
+# coincidence -- the real defect this guards was `CODIPHENTABLET(XIOS)` scoring
+# 0.5000 against "BEDSIDE TABLE ABS 1 S". "TABLE" is listed here rather than in
+# `_TRADE_NAME_STOPWORDS` on purpose: real furniture products legitimately carry
+# it in their master names, so it must stay usable for ordinary retrieval and be
+# rejected only as SOLE fuzzy evidence. NOTE: this hand-picked set does NOT
+# close the generic-token hole -- "สามัญ" alone reaches 2,804 of 6,671 master
+# products. Applying the existing _GENERIC_TOKEN_MAX_PRODUCTS doctrine here was
+# built, measured and REJECTED (catalog frequency is not specificity: a
+# multi-SKU brand family makes its most diagnostic token look generic, which
+# blocked a correct product and admitted a wrong one). Do not re-derive it --
+# see docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 38, open finding (a).
+_FUZZY_GENERIC_EVIDENCE_TOKENS = frozenset(
+    {"TABLE", "TABLES", "STAND", "CASE", "BAG", "TUBE", "STRIP", "BLISTER", "CARTON", "REFILL", "SIZE", "TYPE", "MODEL"}
+)
+
+
+# Thai is written WITHOUT word spaces, so `normalize_product_text` cannot split
+# a Thai run into words the way it does for Latin -- a whole Thai phrase arrives
+# as ONE agglutinated token. Requiring exact token equality there is therefore
+# not "strict", it is simply wrong: the master name "ยาพาราเซตามอล" (ya- =
+# "medicine" prefix) and the invoice's "พาราเซตามอล" are the same drug and share
+# no exact token. Latin tokens are already whitespace-separated words, so they
+# stay on exact equality -- which is what keeps a fused "CODIPHENTABLET" from
+# matching "CODIPHEN" by containment before the B2 split has run. See
+# docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 38: this guard as first committed
+# demanded exact equality and turned a correct 0.9474 Thai match into
+# UNRESOLVED.
+_MIN_THAI_CONTAINMENT_LEN = 4
+
+# `normalize_product_text` rewrites Thai SARA AM (U+0E33 "ำ") into its decomposed
+# NIKHAHIT+SARA AA form, so a stopword written the composed way can never equal a
+# token that has been through the normalizer ("ยาน้ำ" -> "ยาน้ํา"). The guard
+# below compares NORMALIZED tokens, so it must compare them against NORMALIZED
+# stopwords or the Thai half of its generic-word filter silently does nothing.
+# Scope note: this local set fixes the comparison INSIDE this guard only. The
+# same composed/decomposed mismatch also affects `_THAI_TRADE_NAME_STOPWORDS` as
+# used by `extract_trade_name_tokens`, and `_THAI_DOSAGE_FORM_MAP` as used by
+# `extract_attributes` -- both pre-date this change and are reported as separate
+# findings rather than altered here, because fixing them shifts existing
+# retrieval and contradiction behaviour well beyond this remediation. Both are
+# logged as open findings (b) and (c) in docs/DEV_LAPTOP_SETUP_LEDGER_TH.md
+# section 38.
+_THAI_TRADE_NAME_STOPWORDS_NORMALIZED = frozenset(
+    normalize_product_text(word) for word in _THAI_TRADE_NAME_STOPWORDS
+) | _THAI_TRADE_NAME_STOPWORDS
+
+
+def meaningful_shared_tokens(source_normalized: str, candidate_normalized: str) -> set[str]:
+    """Trade-name tokens present on BOTH sides, excluding generic dosage-form,
+    packaging, and furniture words. A non-empty result is the minimum evidence
+    the fuzzy tier needs before it may propose a product at all.
+
+    Latin: exact token equality. Thai: exact equality OR containment of one
+    agglutinated run inside the other (see `_MIN_THAI_CONTAINMENT_LEN`), because
+    Thai has no word boundaries to tokenize on.
+    """
+    source = set(extract_trade_name_tokens(source_normalized)) - _FUZZY_GENERIC_EVIDENCE_TOKENS
+    candidate = set(extract_trade_name_tokens(candidate_normalized)) - _FUZZY_GENERIC_EVIDENCE_TOKENS
+    shared = source & candidate
+    for source_token in source - shared:
+        if detect_script(source_token) != "THAI":
+            continue
+        for candidate_token in candidate - shared:
+            if detect_script(candidate_token) != "THAI":
+                continue
+            shorter, longer = sorted((source_token, candidate_token), key=len)
+            if (
+                len(shorter) >= _MIN_THAI_CONTAINMENT_LEN
+                and shorter in longer
+                and shorter not in _THAI_TRADE_NAME_STOPWORDS_NORMALIZED
+            ):
+                shared.add(shorter)
+    return shared
+
+
 def within_edit_distance_one(a: str, b: str) -> bool:
     """True when `a` can become `b` via at most one single-character
     insertion, deletion, or substitution. Used for the "คุณหมายถึง...หรือไม่"
@@ -627,6 +758,14 @@ class ProductMatcher:
         code_scan_text = " ".join(filter(None, [line.get("description_final"), line.get("raw_ocr_text")]))
         normalized = normalize_product_text(source_text)
         description_normalized = normalize_product_text(line.get("description_final") or "")
+        # B2: retrieval-only views of the same text, with a fused known
+        # dosage-form suffix split back off (`CODIPHENTABLET` ->
+        # `CODIPHEN TABLET`). `normalized`/`description_normalized` above are
+        # the AUDIT values and stay exactly as the OCR produced them -- they are
+        # what gets hashed into `input_hash` and reported as `normalized_text`.
+        # Nothing below rewrites the stored evidence.
+        normalized_retrieval = recover_fused_dosage_form(normalized)
+        description_retrieval = recover_fused_dosage_form(description_normalized)
         supplier_sku_normalized = normalize_supplier_sku(line.get("supplier_sku"))
         candidates: list[dict] = []
         selected: dict | None = None
@@ -849,7 +988,7 @@ class ProductMatcher:
         trade_name_candidates: list[tuple[dict, str]] = []
         if selected is None and not quarantined:
             trade_name_candidates, trade_name_tie = self._trade_name_candidates(
-                document, source_attrs, normalized, description_normalized
+                document, source_attrs, normalized_retrieval, description_retrieval
             )
             if trade_name_candidates and not trade_name_tie:
                 selected = trade_name_candidates[0][0]
@@ -877,7 +1016,7 @@ class ProductMatcher:
         spelling_corrections: dict[str, str] = {}
         if selected is None and not quarantined and not trade_name_candidates:
             spelling_suggestion_candidates, spelling_tie, spelling_corrections = self._spelling_suggestion_candidates(
-                document, source_attrs, normalized, description_normalized
+                document, source_attrs, normalized_retrieval, description_retrieval
             )
             if spelling_suggestion_candidates and not spelling_tie:
                 selected = spelling_suggestion_candidates[0][0]
@@ -945,6 +1084,7 @@ class ProductMatcher:
                 for product, score in spelling_suggestion_candidates
             ]
         else:
+            fuzzy_rejected_for_evidence = 0
             products = self.cache.list_products()
             for product in products:
                 # Bilingual fuzzy fallback (Slice 2): score against BOTH
@@ -975,6 +1115,33 @@ class ProductMatcher:
                 )
                 if attributes_conflict(source_attrs, extract_attributes(candidate_text)):
                     continue
+                # B1: character-level similarity ALONE may not propose a
+                # product. SequenceMatcher happily scores 0.5000 between
+                # "CODIPHENTABLET XIOS" and "BEDSIDE TABLE ABS 1 S" purely on
+                # shared letters, and that suggestion is not merely unhelpful --
+                # a plausible-looking wrong product in front of a reviewer is
+                # how poisoned confirmations enter the alias table (Bible
+                # section 3: precision over recall). Require at least one
+                # meaningful trade-name token shared with the candidate;
+                # generic dosage-form/packaging/furniture overlap such as
+                # TABLE/TABLET can never qualify on its own. Note the
+                # threshold is untouched: this ADDS evidence, it does not relax
+                # the bar to let anything through.
+                # Scope: this guard governs whether the fuzzy tier may PROPOSE a
+                # product, which is only in play when no stronger tier already
+                # selected one. When a stronger tier (EXACT_NAME, EXACT_CODE,
+                # ...) has already decided, this loop is merely decorating the
+                # reviewer's alternatives list, and silently shortening that
+                # list would take correction options away from a human without
+                # improving precision anywhere.
+                if selected is None:
+                    shared = meaningful_shared_tokens(
+                        description_retrieval or normalized_retrieval,
+                        normalize_product_text(" ".join(filter(None, [product.get("name_thai"), product.get("name_eng")]))),
+                    )
+                    if not shared:
+                        fuzzy_rejected_for_evidence += 1
+                        continue
                 candidates.append({"product_code": product["product_code"], "name": product["name"], "score": f"{score:.4f}", "purchase_count": history_codes.get(product["product_code"], {}).get("purchase_count", 0)})
             candidates.sort(key=lambda item: (-float(item["score"]), item["product_code"]))
             candidates = candidates[:5]
@@ -982,6 +1149,16 @@ class ProductMatcher:
             if selected is None and candidates:
                 top = self.cache.get_product(candidates[0]["product_code"])
                 selected, tier, method, reasons = top, "FUZZY_SUGGESTION", "fuzzy_human_suggestion", ["HUMAN_CONFIRM_REQUIRED"]
+            elif selected is None and fuzzy_rejected_for_evidence:
+                # Something DID clear the similarity threshold but nothing
+                # cleared the evidence bar. Say so explicitly, so an auditor can
+                # tell "no product looked similar" apart from "similar-looking
+                # products were deliberately refused".
+                tier, method, reasons = (
+                    "UNRESOLVED",
+                    "unresolved_human",
+                    [f"FUZZY_INSUFFICIENT_TOKEN_EVIDENCE:{fuzzy_rejected_for_evidence}"],
+                )
 
         if selected and not self.cache.get_product(selected["product_code"]):
             selected = None
