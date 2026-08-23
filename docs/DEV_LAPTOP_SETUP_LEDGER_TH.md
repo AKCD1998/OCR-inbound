@@ -1904,3 +1904,125 @@ packets: `CANDIDATE_REPORT_SLICE5_CACHE_AND_MATCHER_REMEDIATION.md` (§15 self-r
 base-drift record), `REMEDIATION_PACKET_THAI_EVIDENCE_FOR_CODEX.md` (§12 the rejected dead end) and
 `HANDOFF_TO_CODEX_TECH_LEAD_2026-08-21.md`. Stopping here — **awaiting Codex independent
 adjudication in §39.**
+
+## 39. Codex independent adjudication of Slice 5 / Track B / first CI (§38) (2026-08-23)
+
+**Verdict: BLOCKED — the core remediation is directionally correct and the reported gates pass, but
+three independently reproduced safety/contract defects remain. PR #3 must stay Draft; no merge or
+deploy is authorized.**
+
+**Scope and provenance independently checked.** Codex reviewed the cumulative branch from base
+`f28bb7e` through `0cca760`, including `4b5e185`, `92ba315`, `d7a5ded`, `49d7422`, `b7fbd72`,
+`04a959f`, and `0cca760`. The last two commits have the boundaries §38 claims:
+`04a959f` changes only `docs/DEV_LAPTOP_SETUP_LEDGER_TH.md` (+242 lines), while `0cca760` changes
+only comments in `src/ocr_inbound/matching.py`; no executable line changed. Local and origin were
+both `0cca760` at review start. PR #3 was independently queried through GitHub: OPEN, Draft,
+MERGEABLE, with both the push and pull-request CI runs green at the exact `0cca760` head.
+
+**Verification independently rerun.** Focused master-cache + matcher-remediation + safety-scan tests:
+**66/66**. Full current worktree: **280/280** (the extra untracked
+`tests/test_monolin_learning_path.py` was discovered but not modified). A clean `git archive HEAD`
+checkout, with no gitignored real-page evidence and no untracked test: **249/249, skipped=13**, exactly
+matching the workflow's accounting. `compileall`, `scripts/safety_scan.py`, zipapp build,
+`package_smoke.py`, and `git diff --check` all passed. The local production-derived cache was read
+only through copies / pure `_predict()` probes: status `OK`, source
+`PRODUCTION_READ_ONLY_SNAPSHOT`, **6,671 products / 6,670 units**, fingerprint
+`b281bf5c...e5c728f`. Nothing was persisted to that cache or its app database; no production/shared
+database or credential was accessed.
+
+**Accepted parts.** The A1-A6 + diagnostic-lock corrections have the right ownership and
+fail-closed direction; the B1/B2 CODIPHEN staged proof is real; the Thai exact-token regression in
+`4b5e185` is real and `92ba315` restores the demonstrated 0.9474 correct Thai suggestion; CI really
+does run both branch-head and PR-merge events without cross-cancelling; the clean-checkout test-count
+explanation is accurate; and §38 records the rejected frequency-as-specificity approach, vacuous-test
+near miss, superseded 150-name probe, CI mistakes, and incorrect `ssl_context` hypothesis without
+overclaiming them. These accepted parts do not close the three findings below.
+
+### BLOCKING finding 1 — a post-replace failure violates the cache's byte-identical failure contract
+
+`refresh_master_cache()` performs the irreversible `os.replace(candidate, profile.ada_cache_db)` at
+`master_cache.py:376`, sets `candidate = None`, and then calls the independently fallible
+`status_master_cache(profile)` at line 378. The runbook nevertheless promises at line 172 that
+**every failure** leaves the previous cache byte-identical.
+
+Codex seeded the packaged fixture, recorded its SHA-256, forced only the post-replace status call to
+raise `RuntimeError("forced post-replace status failure")`, and ran a real refresh through the fake
+read-only Postgres session. The command raised that RuntimeError, but the cache SHA-256 changed from
+`b3c81eee...7814da` to `4d561c41...185e276` and the new `IC-001962` row was present. The lock and
+`.next` file were clean, so this is specifically a commit-point defect, not temp cleanup noise: an
+operator is told the refresh failed although the old cache has already been replaced. A failure while
+unlinking the lock in the outer `finally` has the same post-commit shape.
+
+**Required remediation:** define one explicit commit point. No operation after the successful
+`os.replace` may turn the command into a reported refresh failure while the new cache remains live.
+Precompute/validate the returned status before replacement or otherwise make post-commit reporting
+and lock-cleanup semantics explicit and truthful. Add a non-vacuous test that forces the exact
+post-replace failure and proves the final return/error, cache bytes/provenance, lock, and `.next`
+state agree with the documented contract. Do not weaken the runbook silently to paper over an
+ambiguous commit result.
+
+### BLOCKING finding 2 — `92ba315` introduces a confirmed wrong-product suggestion
+
+The generic-token hard filter remains correctly rejected: §38's measured conclusion that catalog
+frequency is not specificity is accepted and must not be re-derived as the fix. But documenting the
+remaining hole does not make the new behavioural regression acceptable on a branch whose purpose is
+matcher false-positive safety.
+
+Codex independently copied the real 6,671-row cache into a temporary profile and called pure
+`_predict()` on the three packet inputs. Current HEAD reproduces all three wrong review suggestions:
+
+- `สามัญ ของที่ไม่มีอยู่จริง` → `IC-003109` / `FUZZY_SUGGESTION` / `0.4783` (pre-existing);
+- `ผงไม่มีจริง 5 กรัม` → `630030194` / `FUZZY_SUGGESTION` / `0.5263` (pre-existing);
+- `สามัญ ZZZQQ ไม่มีสินค้านี้` → `IC-000027 COKE NO SUGAR 450 ML` /
+  `FUZZY_SUGGESTION` / `0.5091` (**new in `92ba315`**).
+
+The same third probe against an isolated `git archive 4b5e185` and the same real cache returns
+`UNRESOLVED`, confirming the transition independently. It is human-confirmation-only and nothing was
+persisted, but placing a plausible wrong product in front of a reviewer is the exact poisoned-alias
+risk B1 exists to reduce. The evidence offered to accept that regression is also underpowered by its
+own account: only 2 of 70 targeted corpus cases changed. The two correct recoveries are valuable, but
+they do not justify sealing a known false-positive transition as a residual risk under the standing
+precision-first contract.
+
+**Required remediation:** retain the Thai false-negative recovery and the CODIPHEN guard/recovery
+matrix while preventing generic Thai house-brand/unit evidence from admitting unrelated products.
+Use a mechanism other than the rejected raw catalog-frequency cutoff (for example a measured curated
+generic/unit policy or weighted evidence). Pin all three adversarial cases non-vacuously, preserve the
+two known correct containment recoveries, and rerun the same seeded 70-case probe with no new wrong
+transition and no loss relative to the current correct baseline. If the mechanism changes Thai
+attribute extraction/tokenization beyond this guard, measure that larger blast radius separately.
+
+### BLOCKING finding 3 — the hardened secret scan still omits tracked high-risk config paths
+
+`scripts/safety_scan.py` limits tree scanning to `src`, `scripts`, `tests`, `docs`, and `resources`
+(`SCAN_ROOTS`, line 27), while root files are admitted only by suffix (lines 31 and 88). Therefore the
+tracked workflow `.github/workflows/ci.yml` is outside every root and the tracked
+`.env.review.example` is rejected because its final suffix is `.example`.
+
+Codex built a temporary Git repository, planted a matchable password literal in both exact paths,
+added both files to Git plus one safe `src/safe.py`, and ran the real `run_scan()`. Result:
+`secret_scan: pass`, zero findings, `files_scanned: 1`; `git ls-files` confirmed all three were
+tracked. This is non-vacuous proof that two common credential-bearing/control-plane locations remain
+invisible even though the scan is green.
+
+**Required remediation:** include tracked `.github/workflows/**/*.{yml,yaml}` and tracked env/example
+configuration files (at minimum the existing `.env.review.example`) in the candidate set, with planted
+positive tests for both paths and a clean real-repository scan. Preserve the intentional exclusions
+for generated/binary/environment data and the no-suppression rule.
+
+**Non-blocking findings and architecture disposition.** §38 findings (b) (three dead SARA-AM
+stopwords in ordinary trade-name extraction, measured live-master blast radius zero) and (c) (Thai
+dosage-form contradiction extraction) remain valid follow-up work; finding (c) needs corpus
+measurement before changing a blocking guard. The 25 real-evidence tests absent from CI, advisory-only
+branch protection, merge-commit versus branch-head distinction, and absent lint/type/actionlint also
+remain explicit limitations, not newly discovered blockers for this slice. No update to
+`ARCHITECTURE_CORROBORATION_LEDGER_TH.md` is warranted yet: §38/§39 record an implementation policy,
+rejected heuristic, and unresolved matcher design problem, not a selected architecture decision or a
+new C-xxx conflict. Promote it only if a cross-matcher Thai segmentation/tokenization architecture is
+actually proposed and owner/reviewer-gated.
+
+Remediation may land as additive follow-up commits on the Draft branch under the already-recorded
+authority, with no amend, force-push, merge, deploy, production write, alias approval, or auto-confirm
+expansion. Return for Codex re-adjudication after the three blocking probes and the full clean/current
+gates pass. Codex changed only this ledger section in the adjudication worktree; all pre-existing
+untracked files were preserved.
