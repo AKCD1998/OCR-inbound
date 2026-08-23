@@ -247,7 +247,13 @@ def _split_fused_suffix(word: str) -> str:
 # 0.5000 against "BEDSIDE TABLE ABS 1 S". "TABLE" is listed here rather than in
 # `_TRADE_NAME_STOPWORDS` on purpose: real furniture products legitimately carry
 # it in their master names, so it must stay usable for ordinary retrieval and be
-# rejected only as SOLE fuzzy evidence.
+# rejected only as SOLE fuzzy evidence. NOTE: this hand-picked set does NOT
+# close the generic-token hole -- "สามัญ" alone reaches 2,804 of 6,671 master
+# products. Applying the existing _GENERIC_TOKEN_MAX_PRODUCTS doctrine here was
+# built, measured and REJECTED (catalog frequency is not specificity: a
+# multi-SKU brand family makes its most diagnostic token look generic, which
+# blocked a correct product and admitted a wrong one). Do not re-derive it --
+# see docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 38, open finding (a).
 _FUZZY_GENERIC_EVIDENCE_TOKENS = frozenset(
     {"TABLE", "TABLES", "STAND", "CASE", "BAG", "TUBE", "STRIP", "BLISTER", "CARTON", "REFILL", "SIZE", "TYPE", "MODEL"}
 )
@@ -260,7 +266,10 @@ _FUZZY_GENERIC_EVIDENCE_TOKENS = frozenset(
 # "medicine" prefix) and the invoice's "พาราเซตามอล" are the same drug and share
 # no exact token. Latin tokens are already whitespace-separated words, so they
 # stay on exact equality -- which is what keeps a fused "CODIPHENTABLET" from
-# matching "CODIPHEN" by containment before the B2 split has run.
+# matching "CODIPHEN" by containment before the B2 split has run. See
+# docs/DEV_LAPTOP_SETUP_LEDGER_TH.md section 38: this guard as first committed
+# demanded exact equality and turned a correct 0.9474 Thai match into
+# UNRESOLVED.
 _MIN_THAI_CONTAINMENT_LEN = 4
 
 # `normalize_product_text` rewrites Thai SARA AM (U+0E33 "ำ") into its decomposed
@@ -273,7 +282,9 @@ _MIN_THAI_CONTAINMENT_LEN = 4
 # used by `extract_trade_name_tokens`, and `_THAI_DOSAGE_FORM_MAP` as used by
 # `extract_attributes` -- both pre-date this change and are reported as separate
 # findings rather than altered here, because fixing them shifts existing
-# retrieval and contradiction behaviour well beyond this remediation.
+# retrieval and contradiction behaviour well beyond this remediation. Both are
+# logged as open findings (b) and (c) in docs/DEV_LAPTOP_SETUP_LEDGER_TH.md
+# section 38.
 _THAI_TRADE_NAME_STOPWORDS_NORMALIZED = frozenset(
     normalize_product_text(word) for word in _THAI_TRADE_NAME_STOPWORDS
 ) | _THAI_TRADE_NAME_STOPWORDS
