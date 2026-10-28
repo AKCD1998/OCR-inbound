@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>รับเอกสาร · ตรวจครั้งสุดท้าย</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div><span class="eyebrow">SC · DOCUMENT REVIEW</span><h1>รับเอกสาร แล้วตรวจครั้งสุดท้าย</h1></div>
+    <div class="reviewer" id="reviewer-name"></div>
+  </header>
+  <main>
+    <div id="alert" role="alert" class="alert hidden"></div>
+    <section id="inbox-view">
+      <div class="introduction"><h2>ส่งเอกสารให้ระบบเตรียมข้อมูล</h2><p>วาง PDF หรือภาพใบรับสินค้า ระบบจะเตรียมรายการและตรวจข้อขัดกันให้ก่อน แล้วรวมสิ่งที่ต้องตัดสินใจไว้ในหน้าเดียว</p></div>
+      <label id="drop-zone" class="drop-zone" tabindex="0" for="file-input">
+        <span class="upload-icon" aria-hidden="true">↑</span>
+        <strong>ลากเอกสารมาวางที่นี่</strong><span>หรือกดเพื่อเลือกไฟล์ PDF, PNG, JPEG</span>
+        <span id="upload-limit" class="small"></span>
+      </label>
+      <input type="file" id="file-input" accept="application/pdf,image/png,image/jpeg" hidden>
+      <div id="upload-status" class="small" role="status"></div>
+      <div class="section-title"><h2>เอกสารของคุณ</h2><button id="refresh-documents" class="secondary">อัปเดตรายการ</button></div>
+      <div id="document-list" class="document-list"><p class="muted">กำลังเปิดรายการ…</p></div>
+    </section>
+    <section id="document-view" class="hidden">
+      <div class="document-topbar"><button id="back-inbox" class="secondary">← เอกสารทั้งหมด</button><div><h2 id="document-title"></h2><p id="document-status" class="small"></p></div><button id="export-document" disabled>ดาวน์โหลดข้อมูลที่ยืนยันแล้ว</button></div>
+      <label class="completeness-check"><input type="checkbox" id="completeness-confirmed"><span><strong>ตรวจเทียบต้นฉบับครบทุกหน้า และไม่มีรายการตกหล่นแล้ว</strong><small>ยืนยันหลังตรวจรายการและต้นฉบับทั้งชุด หากมีการแก้รายการเพิ่มต้องตรวจยืนยันข้อนี้ใหม่</small></span></label>
+      <div id="processing-message" class="processing hidden" role="status"><div class="spinner" aria-hidden="true"></div><div><strong>ระบบกำลังเตรียมเอกสาร</strong><p>คุณกลับมาตรวจครั้งสุดท้ายเมื่อพร้อมได้ รายการที่ยังไม่ชัดจะถูกรวมไว้ให้ตัดสินใจพร้อมกัน</p></div></div>
+      <div id="review-workspace" class="workspace">
+        <section class="paper-panel">
+          <div class="page-toolbar"><button id="previous-page" class="secondary" aria-label="หน้าก่อน">←</button><select id="page-select" aria-label="เลือกหน้าเอกสาร"></select><button id="next-page" class="secondary" aria-label="หน้าถัดไป">→</button><button id="fit-page" class="secondary">เต็มใบ</button><button id="focus-field" class="secondary">ขยายจุดที่เลือก</button></div>
+          <div id="page-stage" class="page-stage"></div>
+          <p id="coordinate-note" class="coordinate-note"></p>
+          <div class="legend"><span><i class="dot pending"></i>รอยืนยัน</span><span><i class="dot issue"></i>มีประเด็น / พักไว้</span><span><i class="dot approved"></i>ผู้ตรวจยืนยันแล้ว</span></div>
+          <p class="small paper-note">กดกรอบบนภาพเพื่อเปิดช่องนั้น สีแสดงสถานะการตรวจครั้งสุดท้าย ไม่ใช่คะแนนความแม่นยำของ OCR</p>
+        </section>
+        <section class="review-panel">
+          <div id="document-summary" class="summary-strip"></div>
+          <details id="add-row-details" class="add-row-details"><summary>+ เพิ่มรายการที่ตกหล่นจากเอกสาร</summary><p class="small">เพิ่มจากต้นฉบับหน้าที่กำลังเปิด รายการนี้จะมีป้ายว่าคุณเพิ่มจากเอกสาร แล้วนำไปตรวจยืนยันเหมือนรายการอื่น</p><div id="add-row-fields" class="add-row-fields"></div><label for="add-row-note" class="small">เหตุผล / ตำแหน่งในต้นฉบับ</label><textarea id="add-row-note" placeholder="เช่น รายการลำดับ 8 ใต้แถวที่ระบบอ่านได้…"></textarea><button id="add-row-submit">เพิ่มรายการไว้ตรวจยืนยัน</button><p id="add-row-status" class="small"></p></details>
+          <div class="row-toolbar"><label for="row-filter">แสดงรายการ</label><select id="row-filter"><option value="all">ทั้งหมดในหน้านี้</option><option value="pending">ที่ยังไม่ได้ยืนยัน</option><option value="issues">ที่มีประเด็น / พักไว้</option><option value="approved">ที่ยืนยันแล้ว</option></select></div>
+          <div id="row-list" class="row-list"></div>
+          <article id="row-detail" class="row-detail"><p class="muted">เลือกรายการหรือกรอบบนภาพเพื่อดูรายละเอียด</p></article>
+        </section>
+      </div>
+      <details class="history"><summary>ประวัติการเตรียมและการตรวจเอกสาร</summary><div id="document-history"></div></details>
+    </section>
+    <footer>ต้นฉบับ คำอ่าน ข้อมูลทะเบียน และคำยืนยันของคุณเก็บแยกกัน การดาวน์โหลดเป็นชุดข้อมูลพร้อมหลักฐานสำหรับส่งต่อ ยังไม่มีการเขียนเข้า ERP จริง</footer>
+  </main>
+</body>
+</html>

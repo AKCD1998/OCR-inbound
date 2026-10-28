@@ -1,0 +1,21 @@
+{
+  "contract": "document-ai-isolated-cpu-environment.v1",
+  "python_abi": "cp311-win_amd64",
+  "primary_requirements": [
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp311-cp311-win_amd64.whl#sha256=7631ef49fbd38d382909525b83696dc12a55d68492ade4ace3883c62b9fc140f",
+    "torchvision @ https://download-r2.pytorch.org/whl/cpu/torchvision-0.23.0%2Bcpu-cp311-cp311-win_amd64.whl#sha256=51603eb071d0681abc4db98b10ff394ace31f425852e8de249b91c09c60eb19a",
+    "transformers==5.21.0",
+    "docling-ibm-models==4.0.4",
+    "numpy==2.2.6",
+    "Pillow==12.3.0",
+    "opencv-python-headless==4.12.0.88",
+    "psutil==7.2.2"
+  ],
+  "allowed_artifact_hosts": ["files.pythonhosted.org", "download.pytorch.org", "download-r2.pytorch.org"],
+  "maximum_resolved_download_bytes": 2147483648,
+  "minimum_free_disk_bytes_before_setup": 6442450944,
+  "sources": ["https://download.pytorch.org/whl/cpu/torch/", "https://download.pytorch.org/whl/cpu/torchvision/", "https://pypi.org/pypi/docling-ibm-models/4.0.4/json", "https://pypi.org/pypi/transformers/5.21.0/json"],
+  "model_downloads": 0,
+  "model_imports": 0,
+  "mutates_frozen_runtime": false
+}

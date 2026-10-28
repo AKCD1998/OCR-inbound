@@ -1,0 +1,24 @@
+name: Document AI prototype
+on:
+  push:
+    branches: ["codex/document-ai-**"]
+  pull_request:
+    paths: ["src/ocr_inbound/document_ai/**", "experiments/document_ai/**", "tests/test_document_ai_*.py"]
+permissions:
+  contents: read
+jobs:
+  portable-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 5
+    env:
+      PYTHONPATH: src
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -B -W error::ResourceWarning -m unittest discover -s tests -p "test_document_ai_*.py" -q

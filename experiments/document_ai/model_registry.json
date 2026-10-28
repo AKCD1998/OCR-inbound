@@ -1,0 +1,270 @@
+{
+  "contract": "document-ai-public-model-registry.v1",
+  "retrieved_utc": "2026-10-28",
+  "models": {
+    "pp-layout": {
+      "repo_id": "PaddlePaddle/PP-DocLayout-M",
+      "revision": "7dbfcce3154a55776dc71ca026a4a2a8388dad8d",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "name": "config.json",
+          "size": 4715,
+          "sha256": null,
+          "git_blob_sha1": "edeaa13f48ce0f5344190cb6f366f02339c8f82a",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-M/resolve/7dbfcce3154a55776dc71ca026a4a2a8388dad8d/config.json"
+        },
+        {
+          "name": "inference.json",
+          "size": 390085,
+          "sha256": null,
+          "git_blob_sha1": "93b97a329b1518e6739518459d247670f7b55712",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-M/resolve/7dbfcce3154a55776dc71ca026a4a2a8388dad8d/inference.json"
+        },
+        {
+          "name": "inference.pdiparams",
+          "size": 23370814,
+          "sha256": "f374bb0269d91ab2eed393a5a2da6d73d98896ac5eeae4f9f585eba19bcbba74",
+          "git_blob_sha1": "b1717823eda0914dd4c940f9e54e46ae572898b6",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-M/resolve/7dbfcce3154a55776dc71ca026a4a2a8388dad8d/inference.pdiparams"
+        },
+        {
+          "name": "inference.yml",
+          "size": 1579,
+          "sha256": null,
+          "git_blob_sha1": "bb33b5cdbeb8b56a1299963ef10b4900e5349de4",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-M/resolve/7dbfcce3154a55776dc71ca026a4a2a8388dad8d/inference.yml"
+        }
+      ],
+      "artifact_bytes": 23767193,
+      "weight_bytes": 23370814
+    },
+    "docling-layout": {
+      "repo_id": "docling-project/docling-layout-egret-medium",
+      "revision": "77ede7cc7bed96d853c58f319734803d6ea2ea5c",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "name": "config.json",
+          "size": 4213,
+          "sha256": null,
+          "git_blob_sha1": "85f35c4c604189c96a96a79bfde7837ae5a81656",
+          "url": "https://huggingface.co/docling-project/docling-layout-egret-medium/resolve/77ede7cc7bed96d853c58f319734803d6ea2ea5c/config.json"
+        },
+        {
+          "name": "model.safetensors",
+          "size": 78311396,
+          "sha256": "e7fc5b9a353826c123c5d03efc230909ac02b93e26293ec7cb4db8978fe9e3af",
+          "git_blob_sha1": "9a6dc170961c347af27583850553461ac891bee3",
+          "url": "https://huggingface.co/docling-project/docling-layout-egret-medium/resolve/77ede7cc7bed96d853c58f319734803d6ea2ea5c/model.safetensors"
+        },
+        {
+          "name": "preprocessor_config.json",
+          "size": 444,
+          "sha256": null,
+          "git_blob_sha1": "fcdff16b42e5ebc51d28f59184490c6eff91a88b",
+          "url": "https://huggingface.co/docling-project/docling-layout-egret-medium/resolve/77ede7cc7bed96d853c58f319734803d6ea2ea5c/preprocessor_config.json"
+        }
+      ],
+      "artifact_bytes": 78316053,
+      "weight_bytes": 78311396
+    },
+    "tableformer": {
+      "repo_id": "docling-project/docling-models",
+      "revision": "2199320848bb9a8a519d22e4b528185a4f9a6f64",
+      "license": [
+        "cdla-permissive-2.0",
+        "apache-2.0"
+      ],
+      "files": [
+        {
+          "name": "model_artifacts/tableformer/fast/tableformer_fast.safetensors",
+          "size": 145453276,
+          "sha256": "3119563aab5a7c96fda4d621119b63fd8806272b86c30936d15507616422f718",
+          "git_blob_sha1": "f6653fe54c4cb33f058203af9ee424debcbcbaf2",
+          "url": "https://huggingface.co/docling-project/docling-models/resolve/2199320848bb9a8a519d22e4b528185a4f9a6f64/model_artifacts/tableformer/fast/tableformer_fast.safetensors"
+        },
+        {
+          "name": "model_artifacts/tableformer/fast/tm_config.json",
+          "size": 7060,
+          "sha256": null,
+          "git_blob_sha1": "d02c5889d288b8baefd42e9e4da094f0cea07bbe",
+          "url": "https://huggingface.co/docling-project/docling-models/resolve/2199320848bb9a8a519d22e4b528185a4f9a6f64/model_artifacts/tableformer/fast/tm_config.json"
+        }
+      ],
+      "artifact_bytes": 145460336,
+      "weight_bytes": 145453276
+    },
+    "qwen": {
+      "repo_id": "Qwen/Qwen3-VL-2B-Instruct",
+      "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "name": "chat_template.json",
+          "size": 5502,
+          "sha256": null,
+          "git_blob_sha1": "e49e75bdda104c8de941eb20e0b3765184fb27bc",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/chat_template.json"
+        },
+        {
+          "name": "config.json",
+          "size": 1505,
+          "sha256": null,
+          "git_blob_sha1": "0cd8c646eb55794594b14fefcd1d3acea5cc000f",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/config.json"
+        },
+        {
+          "name": "generation_config.json",
+          "size": 269,
+          "sha256": null,
+          "git_blob_sha1": "7bb37933d2d86e4ceaabcc6540be989658f238e9",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/generation_config.json"
+        },
+        {
+          "name": "merges.txt",
+          "size": 1671839,
+          "sha256": null,
+          "git_blob_sha1": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/merges.txt"
+        },
+        {
+          "name": "model.safetensors",
+          "size": 4255140312,
+          "sha256": "7de1838c87a5349b016c26a1c3f7d2bc400a3d485f95ef39a7059ffd734977a0",
+          "git_blob_sha1": "756540b03375b1bb98d2b4b2c562f02eaf569821",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/model.safetensors"
+        },
+        {
+          "name": "preprocessor_config.json",
+          "size": 390,
+          "sha256": null,
+          "git_blob_sha1": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/preprocessor_config.json"
+        },
+        {
+          "name": "tokenizer.json",
+          "size": 7032403,
+          "sha256": null,
+          "git_blob_sha1": "c6cc1014128b19d1fc46b1d30a23e3b1d35db421",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/tokenizer.json"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "size": 10868,
+          "sha256": null,
+          "git_blob_sha1": "d3d3763207692c78780f4bf42d4dadf49a5c8012",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/tokenizer_config.json"
+        },
+        {
+          "name": "video_preprocessor_config.json",
+          "size": 385,
+          "sha256": null,
+          "git_blob_sha1": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/video_preprocessor_config.json"
+        },
+        {
+          "name": "vocab.json",
+          "size": 2776833,
+          "sha256": null,
+          "git_blob_sha1": "4783fe10ac3adce15ac8f358ef5462739852c569",
+          "url": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct/resolve/89644892e4d85e24eaac8bacfd4f463576704203/vocab.json"
+        }
+      ],
+      "artifact_bytes": 4266640306,
+      "weight_bytes": 4255140312,
+      "native_parameter_metadata": {
+        "dtype": "BF16",
+        "parameter_count": 2127532032,
+        "ideal_4bit_parameter_bytes": 1063766016,
+        "remaining_under_1GiB_before_runtime_vision_and_quantization_metadata_bytes": 9975808,
+        "metadata_api": "https://huggingface.co/api/models/Qwen/Qwen3-VL-2B-Instruct/revision/89644892e4d85e24eaac8bacfd4f463576704203",
+        "this_is_a_lower_bound_not_a_tested_quantized_model": true
+      }
+    },
+    "pp-layout-l": {
+      "repo_id": "PaddlePaddle/PP-DocLayout-L",
+      "revision": "ca760c3336d922ee63cdbff85003181222e3911c",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "name": "config.json",
+          "size": 6134,
+          "sha256": null,
+          "git_blob_sha1": "0a3507f7365b0554e4e86d436421c53c3a738fb1",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-L/resolve/ca760c3336d922ee63cdbff85003181222e3911c/config.json"
+        },
+        {
+          "name": "inference.json",
+          "size": 1081389,
+          "sha256": null,
+          "git_blob_sha1": "540c4f71da8b65c044f14a242314cc73de10d3d3",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-L/resolve/ca760c3336d922ee63cdbff85003181222e3911c/inference.json"
+        },
+        {
+          "name": "inference.pdiparams",
+          "size": 129021913,
+          "sha256": "4df69115349e1e6215629d058e3bc7f087cad7a0d2776ef40c463daf73c38982",
+          "git_blob_sha1": "6056fa335bd7fc5df73a72172daa86cc5af469ab",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-L/resolve/ca760c3336d922ee63cdbff85003181222e3911c/inference.pdiparams"
+        },
+        {
+          "name": "inference.yml",
+          "size": 1871,
+          "sha256": null,
+          "git_blob_sha1": "632a2724ad049bbb1ea75777597ad7f12d106692",
+          "url": "https://huggingface.co/PaddlePaddle/PP-DocLayout-L/resolve/ca760c3336d922ee63cdbff85003181222e3911c/inference.yml"
+        }
+      ],
+      "artifact_bytes": 130111307,
+      "weight_bytes": 129021913
+    }
+  },
+  "components": {
+    "pp-layout": {
+      "models": [
+        "pp-layout"
+      ],
+      "required_distributions": [
+        "paddleocr",
+        "paddlepaddle",
+        "paddlex"
+      ],
+      "role": "layout_regions_only"
+    },
+    "docling": {
+      "models": [
+        "docling-layout",
+        "tableformer"
+      ],
+      "required_distributions": [
+        "torch",
+        "transformers",
+        "docling-ibm-models"
+      ],
+      "role": "layout_plus_table_cells"
+    },
+    "qwen": {
+      "models": [
+        "qwen"
+      ],
+      "required_distributions": [
+        "torch",
+        "transformers"
+      ],
+      "role": "visual_language_reading",
+      "selected_precision": "native_bfloat16_no_unverified_quantization"
+    },
+    "pp-layout-l": {
+      "models": [
+        "pp-layout-l"
+      ],
+      "required_distributions": [
+        "paddleocr",
+        "paddlepaddle",
+        "paddlex"
+      ],
+      "role": "layout_regions_only"
+    }
+  }
+}
