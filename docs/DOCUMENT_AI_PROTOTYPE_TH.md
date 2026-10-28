@@ -37,7 +37,7 @@ python -m ocr_inbound.document_ai serve --store <PRIVATE_DIRECTORY> --reviewer <
 
 ## ผลฝึกและเครื่องมือทดลอง
 
-ดู `DOCUMENT_AI_PRODUCT_LEARNING_RESULT_20261028.md` สำหรับผลฝึกตัวจับคู่รอบแรก และ `../experiments/document_ai/README.md` สำหรับ PP-DocLayout, Docling/TableFormer และ Qwen ทุกผลเป็นงานกับข้อมูลพัฒนาแล้ว ไม่ใช่ความแม่นยำบนใบใหม่ ข้อมูลใหม่ต้องสอบรุ่นที่ตรึงไว้ก่อนฝึกต่อ
+ดู `DOCUMENT_AI_PRODUCT_LEARNING_RESULT_20261028.md` สำหรับผลฝึกตัวจับคู่รอบแรก, `DOCUMENT_AI_VERIFICATION_20261028.md` สำหรับผลตรวจโค้ด/เส้นทาง PDF จริงบน HQ และ `../experiments/document_ai/TRIAL_RESULTS.md` สำหรับ PP-DocLayout, Docling/TableFormer และ Qwen ทุกผลเป็นงานกับข้อมูลพัฒนาแล้ว ไม่ใช่ความแม่นยำบนใบใหม่ ข้อมูลใหม่ต้องสอบรุ่นที่ตรึงไว้ก่อนฝึกต่อ
 
 ตัวจับคู่เป็น ML เฉพาะงานเรียนจากคำตอบธุรกิจที่เก็บไว้ ไม่ใช่การสอน OCR ให้อ่านตัวอักษร ชุดนี้ยังไม่มี glyph labels ที่ยืนยันครบ การใช้ LLM silver ไม่ทำให้ข้อมูลกลายเป็น human gold
 
