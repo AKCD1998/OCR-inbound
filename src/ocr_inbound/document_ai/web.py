@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import re
+import socket
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +19,8 @@ STATIC_ROOT = Path(__file__).with_name("static")
 CLIENT_HEADER = "final-review-v1"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_JSON_BYTES = 2 * 1024 * 1024
+ERROR_DRAIN_MAX_BYTES = 64 * 1024
+ERROR_DRAIN_TIMEOUT = .25
 _KEY = re.compile(r"^[^/\\\x00-\x1f\x7f]{1,200}$")
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _CSP = (
@@ -34,7 +38,7 @@ class StoreProtocol(Protocol):
                       reviewer: str) -> dict: ...
     def review_row(self, document_id: str, row_id: str, decision: str,
                    corrections: dict, note: str, reviewer: str,
-                   expected_revision: int) -> dict: ...
+                   expected_revision: int, exclusion_confirmed: bool = False) -> dict: ...
     def history(self, document_id: str) -> list[dict]: ...
     def export_document(self, document_id: str, reviewer: str,
                         completeness_confirmed: bool = False,
@@ -145,7 +149,38 @@ def make_handler(store: StoreProtocol, reviewer: str, *,
             else:
                 value = {"error": {"code": "INTERNAL_ERROR", "message": "ดำเนินการไม่สำเร็จ กรุณาตรวจสถานะเอกสารอีกครั้ง"}}
             self.close_connection = True
-            self._json(value, status)
+            try:
+                self.connection.settimeout(ERROR_DRAIN_TIMEOUT)
+                self._json(value, status)
+                self.wfile.flush()
+            except OSError:
+                pass
+            finally:
+                self._close_error_connection()
+
+        def _close_error_connection(self) -> None:
+            # RFC 9112 section 9.6: closing with unread client bytes can reset
+            # TCP and erase the error response. Send FIN first, then discard a
+            # small, time-bounded amount without parsing or processing it.
+            # Counters are local to this failed request, including keep-alive.
+            try:
+                self.connection.shutdown(socket.SHUT_WR)
+            except OSError:
+                return
+            deadline = time.monotonic() + ERROR_DRAIN_TIMEOUT
+            remaining = ERROR_DRAIN_MAX_BYTES
+            while remaining:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                try:
+                    self.connection.settimeout(wait)
+                    data = self.rfile.read1(min(8192, remaining))
+                except (OSError, ValueError):
+                    break
+                if not data:
+                    break
+                remaining -= len(data)
 
         def _body(self, maximum: int) -> bytes:
             if self.headers.get("Transfer-Encoding"):
@@ -167,10 +202,11 @@ def make_handler(store: StoreProtocol, reviewer: str, *,
             return payload
 
         def _json_body(self) -> dict:
+            payload = self._body(MAX_JSON_BYTES)
             if self.headers.get_content_type() != "application/json":
                 raise RequestProblem("JSON_REQUIRED", "รูปแบบข้อมูลไม่ถูกต้อง", 415)
             try:
-                value = json.loads(self._body(MAX_JSON_BYTES).decode("utf-8"),
+                value = json.loads(payload.decode("utf-8"),
                                    parse_constant=lambda _x: (_ for _ in ()).throw(ValueError("nonfinite")))
             except (ValueError, UnicodeError):
                 raise RequestProblem("INVALID_JSON", "ข้อมูล JSON ไม่ถูกต้อง")
@@ -255,15 +291,21 @@ def make_handler(store: StoreProtocol, reviewer: str, *,
                         row = _key(parts[4])
                         body = self._json_body()
                         decision = body.get("decision")
-                        if decision not in {"approve", "correct", "hold"}:
-                            raise RequestProblem("INVALID_DECISION", "เลือกยืนยัน แก้ไขและยืนยัน หรือพักรายการ")
+                        if decision not in {"approve", "correct", "hold", "exclude"}:
+                            raise RequestProblem("INVALID_DECISION", "เลือกยืนยัน แก้ไข พักไว้ หรือไม่นับเป็นสินค้า")
                         corrections, note = body.get("corrections", {}), body.get("note", "")
                         revision = body.get("expected_revision")
                         if (not isinstance(corrections, dict) or len(corrections) > 100
                                 or not isinstance(note, str) or len(note) > 20000
                                 or not isinstance(revision, int) or isinstance(revision, bool) or revision < 0):
                             raise RequestProblem("INVALID_REVIEW", "ข้อมูลผลตรวจไม่ถูกต้อง")
-                        result = store.review_row(doc, row, decision, corrections, note, reviewer, revision)
+                        if decision == 'exclude':
+                            if body.get('exclusion_confirmed') is not True or not note.strip() or corrections:
+                                raise RequestProblem('EXCLUSION_CONFIRMATION_REQUIRED', 'ระบุเหตุผลและยืนยันกับต้นฉบับว่าแถวนี้ไม่ใช่สินค้า โดยไม่แก้ค่าคำอ่าน')
+                            result = store.review_row(doc, row, decision, corrections, note, reviewer, revision,
+                                                      exclusion_confirmed=True)
+                        else:
+                            result = store.review_row(doc, row, decision, corrections, note, reviewer, revision)
                         return self._json(result)
                 raise RequestProblem("NOT_FOUND", "ไม่พบรายการที่ต้องการบันทึก", 404)
             except (BrokenPipeError, ConnectionResetError):

@@ -187,9 +187,14 @@ class PrototypeStore:
         return self.get_document(document_id)
     def _display_row(self,row):
         r=json.loads(row['proposal']);corrections=json.loads(row['corrections'])
+        for key in ('original_line_kind','disposition','field_values_attested_correct'):r.pop(key,None)
         for k,v in corrections.items():
             r['fields'].setdefault(k,{'raw':None,'normalized':None,'catalogue':None,'bbox':None})
             r['fields'][k]['final']=v['value'];r['fields'][k]['final_authority']='human_attestation';r['fields'][k]['evidence_ids']=v.get('evidence_ids',[])
+        if row['decision']=='excluded':
+            r['original_line_kind']=r.get('line_kind','purchase')
+            r['line_kind']='non_product';r['disposition']='excluded_non_product'
+            r['field_values_attested_correct']=False
         return {**r,'decision':row['decision'],'note':row['note'],'reviewer':row['reviewer']}
     def list_documents(self):
         with self._db() as db:ids=[r[0] for r in db.execute('SELECT id FROM documents ORDER BY created_at DESC')]
@@ -201,8 +206,14 @@ class PrototypeStore:
             if not pages:pages=[{'id':'source','number':1,'source_asset_id':'source','media_type':d['media_type'],'width':None,'height':None}]
             approved=sum(r['decision'] in ('approved','corrected') for r in rows)
             goods=sum(r.get('line_kind') in ('purchase','free') for r in rows)
-            return {'id':d['id'],'filename':d['filename'],'source_sha256':d['source_sha'],'media_type':d['media_type'],'status':d['status'],'revision':d['revision'],'created_at':d['created_at'],'error':d['error'],'pages':pages,'rows':rows,'required_fields':list(self.required_fields),'summary':{'rows':len(rows),'goods_rows':goods,'approved':approved,'held':sum(r['decision']=='held' for r in rows),'pending':sum(r['decision']=='pending' for r in rows),'exportable':bool(goods) and approved==len(rows) and d['status'] in ('review','approved')},'posting_authorized':False}
+            excluded=sum(r['decision']=='excluded' for r in rows)
+            context=sum(r.get('line_kind') not in ('purchase','free') and r['decision']!='excluded' for r in rows)
+            approved_goods=sum(r.get('line_kind') in ('purchase','free') and r['decision'] in ('approved','corrected') for r in rows)
+            return {'id':d['id'],'filename':d['filename'],'source_sha256':d['source_sha'],'media_type':d['media_type'],'status':d['status'],'revision':d['revision'],'created_at':d['created_at'],'error':d['error'],'pages':pages,'rows':rows,'required_fields':list(self.required_fields),'summary':{'rows':len(rows),'goods_rows':goods,'context_rows':context,'excluded':excluded,'approved_goods':approved_goods,'approved':approved,'decided':approved+excluded,'held':sum(r['decision']=='held' for r in rows),'pending':sum(r['decision']=='pending' for r in rows),'exportable':bool(approved_goods) and approved+excluded==len(rows) and d['status'] in ('review','approved')},'posting_authorized':False}
     def _validate_final(self,row):
+        # An exclusion attests only that this is not a goods line. Its retained
+        # machine values can be incomplete or wrong and are not approved facts.
+        if row.get('decision')=='excluded':return
         for key in ('invoice_date','receive_date','receiving_date','receipt_date','mfg_date','exp_date','transfer_date'):
             value=row['fields'].get(key,{}).get('final')
             if value not in (None,''):
@@ -221,12 +232,16 @@ class PrototypeStore:
         except (InvalidOperation,KeyError):raise PrototypeError('QUANTITY_INVALID','จำนวนต้องเป็นตัวเลข',422)
         if not q.is_finite() or q<=0:raise PrototypeError('QUANTITY_INVALID','จำนวนรับต้องมากกว่าศูนย์',422)
         # Invoice dates, payment dates, and receive dates remain independent keys.
-    def review_row(self,document_id,row_id,decision,corrections=None,note='',reviewer='',expected_revision=None):
-        if decision not in ('approve','correct','hold'):raise PrototypeError('DECISION','ผลตรวจไม่ถูกต้อง')
+    def review_row(self,document_id,row_id,decision,corrections=None,note='',reviewer='',expected_revision=None,exclusion_confirmed=False):
+        if decision not in ('approve','correct','hold','exclude'):raise PrototypeError('DECISION','ผลตรวจไม่ถูกต้อง')
         if not str(reviewer).strip():raise PrototypeError('REVIEWER','กรุณาระบุผู้ตรวจ')
         if len(str(note))>10000:raise PrototypeError('NOTE_SIZE','ข้อความยาวเกินไป')
         corrections=corrections or {}
         if not isinstance(corrections,dict):raise PrototypeError('CORRECTIONS','ค่าที่แก้ต้องเป็นรายการช่อง')
+        if decision=='exclude':
+            if not isinstance(reviewer,str) or not reviewer.strip():raise PrototypeError('REVIEWER','กรุณาระบุผู้ตรวจ')
+            if not isinstance(note,str) or not note.strip() or exclusion_confirmed is not True:raise PrototypeError('EXCLUSION_CONFIRMATION_REQUIRED','ระบุเหตุผลและยืนยันกับต้นฉบับว่าแถวนี้ไม่ใช่รายการสินค้า',422)
+            if corrections:raise PrototypeError('EXCLUSION_CORRECTIONS','การไม่นับเป็นสินค้าไม่แก้ค่าที่ระบบอ่าน เก็บเหตุผลและต้นฉบับไว้แยกกัน',422)
         normalized={}
         for k,v in corrections.items():
             if not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',k):raise PrototypeError('FIELD_SCHEMA','ชื่อช่องข้อมูลไม่ถูกต้อง')
@@ -245,13 +260,13 @@ class PrototypeStore:
             row=db.execute('SELECT * FROM rows WHERE document_id=? AND id=?',(document_id,row_id)).fetchone()
             if not row:raise PrototypeError('ROW_NOT_FOUND','ไม่พบแถวนี้',404)
             merged={**json.loads(row['corrections']),**normalized}
-            proposed=self._display_row({**dict(row),'corrections':canonical(merged)})
-            if decision!='hold':self._validate_final(proposed)
-            newdecision={'approve':'approved','correct':'corrected','hold':'held'}[decision]
+            newdecision={'approve':'approved','correct':'corrected','hold':'held','exclude':'excluded'}[decision]
             if normalized and decision=='approve':newdecision='corrected'
+            proposed=self._display_row({**dict(row),'corrections':canonical(merged),'decision':newdecision})
+            if decision not in ('hold','exclude'):self._validate_final(proposed)
             db.execute('UPDATE rows SET decision=?,corrections=?,note=?,reviewer=? WHERE document_id=? AND id=?',(newdecision,canonical(merged),str(note),reviewer,document_id,row_id))
             self._bump(db,document_id)
-            self._event(db,document_id,'row_reviewed',reviewer,{'row_id':row_id,'decision':newdecision,'corrections':normalized,'note':str(note),'based_on_revision':expected_revision,'printed_OCR_modified':False})
+            self._event(db,document_id,'row_reviewed',reviewer,{'row_id':row_id,'decision':newdecision,'corrections':normalized,'note':str(note),'based_on_revision':expected_revision,'printed_OCR_modified':False,'exclusion_confirmed':decision=='exclude' and exclusion_confirmed is True,'disposition':proposed.get('disposition'),'original_line_kind':proposed.get('original_line_kind')})
         return self.get_document(document_id)
     def add_review_row(self,document_id,fields,note,reviewer,expected_revision,page_id):
         if not str(reviewer).strip() or not str(note).strip():raise PrototypeError('ATTESTATION_REQUIRED','กรุณาระบุผู้ตรวจและเหตุผลการเพิ่มรายการ')
@@ -290,7 +305,14 @@ class PrototypeStore:
             for a in db.execute('SELECT id FROM assets WHERE document_id=?',(document_id,)):self.get_asset(document_id,a['id'])
             old=db.execute('SELECT payload FROM exports WHERE document_id=? AND revision=?',(document_id,d['revision'])).fetchone()
             if old:return json.loads(old[0])
+            goods_rows=[r for r in doc['rows'] if r.get('line_kind') in ('purchase','free') and r['decision'] in ('approved','corrected')]
+            excluded_rows=[r for r in doc['rows'] if r['decision']=='excluded']
+            context_rows=[r for r in doc['rows'] if r.get('line_kind') not in ('purchase','free') and r['decision']!='excluded']
             bundle={'contract':'document-ai-erp-handoff.v1','event_type':'reviewed_supplier_document','document_id':document_id,'document_revision':d['revision'],'source_sha256':d['source_sha'],'source_filename':d['filename'],'reviewer':reviewer,'reviewed_at':now(),'completeness_attestation':{'confirmed':True,'source_sha256':d['source_sha'],'revision':d['revision'],'reviewer':reviewer},'human_reviewed':True,'posting_authorized':False,'physical_receipt_automatically_inferred':False,'rows':doc['rows'],'audit_head':db.execute('SELECT event_hash FROM audit ORDER BY sequence DESC LIMIT 1').fetchone()[0]}
+            bundle.update({'goods_rows':goods_rows,'context_rows':context_rows,'excluded_rows':excluded_rows,
+                           'row_scope':{'rows':'all reviewed decisions retained for audit, including exclusions',
+                                        'goods_rows':'only approved/corrected purchase/free document lines; no live posting authority',
+                                        'excluded_rows':'audit only; machine field values are not attested correct'}})
             bundle['payload_sha256']=digest(canonical(bundle).encode())
             db.execute('INSERT INTO exports VALUES(?,?,?,?)',(document_id,d['revision'],canonical(bundle),bundle['payload_sha256']))
             db.execute('UPDATE documents SET status=? WHERE id=?',('approved',document_id))

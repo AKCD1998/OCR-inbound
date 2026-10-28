@@ -5,6 +5,7 @@ import http.client
 import hashlib
 import json
 import select
+import socket
 import tempfile
 import threading
 import unittest
@@ -51,14 +52,17 @@ class FakeStore:
         self.calls.append(('ingest', filename, content, media_type, reviewer))
         return self.document
 
-    def review_row(self, document_id, row_id, decision, corrections, note, reviewer, expected_revision):
-        self.calls.append(('review', document_id, row_id, decision, corrections, note, reviewer, expected_revision))
+    def review_row(self, document_id, row_id, decision, corrections, note, reviewer, expected_revision, exclusion_confirmed=False):
+        entry=('review', document_id, row_id, decision, corrections, note, reviewer, expected_revision)
+        self.calls.append(entry+(exclusion_confirmed,) if decision=='exclude' else entry)
         if expected_revision != self.document['revision']:
             raise DomainError('REVISION_CONFLICT', 'มีผลตรวจใหม่ กรุณาเปิดข้อมูลล่าสุด', 409)
         if document_id != 'doc-1' or row_id != 'row-1':
             raise DomainError('NOT_FOUND', 'ไม่พบรายการ', 404)
         row = self.document['rows'][0]
-        row['decision'] = {'approve':'approved','correct':'corrected','hold':'held'}[decision]
+        row['decision'] = {'approve':'approved','correct':'corrected','hold':'held','exclude':'excluded'}[decision]
+        if decision=='exclude':
+            row['original_line_kind']=row['line_kind'];row['line_kind']='non_product';row['disposition']='excluded_non_product'
         row['note'] = note
         for key, value in corrections.items():
             row['fields'][key]['final'] = value
@@ -236,6 +240,45 @@ class DocumentAIWebTests(unittest.TestCase):
             self.assertEqual('test.reviewer',json.loads(response.read())['reviewer'])
         finally:connection.close()
 
+    def test_wrong_json_mime_waits_for_split_admitted_body_before_415(self):
+        connection=http.client.HTTPConnection('127.0.0.1',self.port,timeout=3)
+        try:
+            connection.putrequest('POST','/api/documents/doc-1/rows/row-1/review')
+            connection.putheader('X-Document-AI-Client',CLIENT_HEADER)
+            connection.putheader('Content-Type','text/plain')
+            connection.putheader('Content-Length','2')
+            connection.endheaders();connection.send(b'{')
+            self.assertFalse(select.select([connection.sock],[],[],.1)[0])
+            connection.send(b'}')
+            response=connection.getresponse()
+            self.assertEqual(415,response.status)
+            self.assertEqual('close',response.getheader('Connection'))
+            self.assertEqual('JSON_REQUIRED',json.loads(response.read())['error']['code'])
+            self.assertFalse(self.store.calls)
+        finally:connection.close()
+
+    def test_denied_origin_delivers_json_and_closes_cleanly_with_unread_body(self):
+        payload=b'%PDF-1.4\nsynthetic denied request'
+        connection=socket.create_connection(('127.0.0.1',self.port),timeout=3)
+        response=None
+        try:
+            headers=(f'POST /api/documents?filename=a.pdf HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n'
+                     f'X-Document-AI-Client: {CLIENT_HEADER}\r\nOrigin: http://other.invalid\r\n'
+                     f'Content-Length: {len(payload)}\r\n\r\n').encode('ascii')
+            connection.sendall(headers)
+            response=http.client.HTTPResponse(connection);response.begin()
+            self.assertEqual(403,response.status)
+            # The denial has already been sent, but staged closure still
+            # accepts this bounded in-flight body without parsing it.
+            connection.sendall(payload);connection.shutdown(socket.SHUT_WR)
+            self.assertEqual('ORIGIN_DENIED',json.loads(response.read())['error']['code'])
+            self.assertEqual('close',response.getheader('Connection'))
+            self.assertEqual(b'',connection.recv(1))
+            self.assertFalse(self.store.calls)
+        finally:
+            if response is not None:response.close()
+            connection.close()
+
     def test_named_review_reaches_core_with_revision_and_raw_corrections(self):
         status, _, body = self.review('correct',corrections={'product_code':'00007'})
         self.assertEqual(200,status)
@@ -248,6 +291,22 @@ class DocumentAIWebTests(unittest.TestCase):
         status,_,body=self.review(expected_revision=0)
         self.assertEqual(409,status)
         self.assertEqual('REVISION_CONFLICT',json.loads(body)['error']['code'])
+
+    def test_exclude_forwards_only_explicit_confirmation_reason_and_revision(self):
+        status,_,payload=self.review('exclude',note='ข้อความรวมท้ายใบ ไม่ใช่สินค้า',exclusion_confirmed=True)
+        self.assertEqual(200,status)
+        self.assertEqual('excluded',json.loads(payload)['rows'][0]['decision'])
+        self.assertEqual(('review','doc-1','row-1','exclude',{},'ข้อความรวมท้ายใบ ไม่ใช่สินค้า','test.reviewer',1,True),self.store.calls[-1])
+        self.assertEqual('A',self.store.document['rows'][0]['fields']['product_code']['raw'])
+        self.assertEqual(409,self.review('exclude',note='same decision from old page',exclusion_confirmed=True)[0])
+
+    def test_exclude_cannot_skip_checkbox_reason_or_rewrite_field_values(self):
+        for values in [{},{'exclusion_confirmed':False},{'exclusion_confirmed':1},
+                       {'exclusion_confirmed':'true'},{'exclusion_confirmed':True,'note':'  '},
+                       {'exclusion_confirmed':True,'corrections':{'product_code':'changed'}}]:
+            with self.subTest(values=values):
+                self.assertEqual(400,self.review('exclude',**values)[0])
+        self.assertFalse(any(call[0]=='review' for call in self.store.calls))
 
     def test_invalid_reviews_are_not_forwarded(self):
         variants=[{'decision':'auto-approve'},{'corrections':[]},{'note':4},

@@ -7,7 +7,7 @@ portable tests without these inputs. No production setting was activated.
 
 ## Verified code
 
-- Clean staged-tree checkout: **367 tests passed, 13 existing private-evidence skips**.
+- Final clean staged-tree checkout: **376 tests passed, 13 existing private-evidence skips**.
 - Source compilation and browser JavaScript syntax passed.
 - Existing secret/catalogue/default-live-flag scan passed; package build and
   package self-check/worker/launch smoke passed.
@@ -17,11 +17,14 @@ portable tests without these inputs. No production setting was activated.
   attestation → JSON download. Raw, normalized, catalogue and human-final
   authority remain separate. No ERP posting occurs.
 
-The full-suite run initially exposed a Windows HTTP early-close problem on an
-invalid filename upload. The final code consumes the size-admitted body before
-semantic filename rejection and announces connection closure; a regression test
-sends the body in two parts and verifies a complete error response without a
-retry. The final 367-test result includes this repair.
+The full-suite runs exposed Windows HTTP early-close problems for invalid
+filenames and rejected JSON MIME types. The final code consumes size-admitted
+bodies before those semantic checks. All errors flush the response, half-close
+the write side, then discard at most 64 KiB for at most 0.25 seconds, following
+[RFC 9112 section 9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6).
+Origin and size admission still precede processing. Split-body and rejected-origin
+regressions verify complete JSON responses without retries or increased client
+timeouts. The final 376-test result includes these repairs and the exclusion gates.
 
 ## Actual HQ ingress proof, separate from fixture replay
 
@@ -48,6 +51,19 @@ This proves the transport/reader/parser/review path works; **it is not a real
 invoice accuracy measurement**. The generated document's answers were not
 injected into the actual HQ OCR worker. The demo fixture replay is a different
 mode and is labelled separately.
+
+The two proposed goods rows are not two verified correct rows: this synthetic
+check exposed a footer proposed as a product and a genuine row omitted. The
+review interface now supports explicit, audited non-product exclusion as well
+as missing-row entry. A real browser excluded the footer with a reason and added
+the generated fixture's missing row: four rows total, two goods, one context and
+one excluded row. Three remained pending and export stayed disabled. The excluded
+OCR text remained intact; the manually added row kept raw OCR null and a distinct
+attestation authority. No reader was rerun for these review actions.
+
+Exclusion never certifies the excluded values as correct. Only approved/corrected
+goods enter `goods_rows`; context and exclusions have separate audit collections.
+An all-excluded or context-only document cannot export a goods handoff.
 
 ## Model decisions
 

@@ -182,6 +182,95 @@ class DocumentAICoreTests(unittest.TestCase):
         with self.assertRaises(PrototypeError):self.export()
         self.assertEqual('held',self.store.get_document(self.doc['id'])['rows'][0]['decision'])
 
+    def test_exclusion_preserves_raw_proposal_and_does_not_attest_bogus_fields(self):
+        result=self.result();result['rows'][0]['fields']['quantity']['normalized']=None
+        result['rows'][0]['fields']['invoice_date']={'raw':'footer 2026-02-31','normalized':'2026-02-31'}
+        self.doc=self.store.install_result(self.doc['id'],result)
+        with closing(sqlite3.connect(self.store.db_path)) as db:
+            before=db.execute('SELECT proposal,corrections FROM rows WHERE id=?',('r-1',)).fetchone()
+        document=self.store.review_row(self.doc['id'],'r-1','exclude',{},'ยอดรวมท้ายใบ ไม่ใช่สินค้า',
+                                      'qa.reviewer',self.doc['revision'],exclusion_confirmed=True)
+        row=document['rows'][0]
+        self.assertEqual(('excluded','non_product','purchase','excluded_non_product'),
+                         (row['decision'],row['line_kind'],row['original_line_kind'],row['disposition']))
+        self.assertFalse(row['field_values_attested_correct'])
+        self.assertEqual('2',row['fields']['quantity']['raw']);self.assertIsNone(row['fields']['quantity']['final'])
+        self.assertEqual('2026-02-31',row['fields']['invoice_date']['final'])
+        self.assertEqual((0,1,1,0),(document['summary']['goods_rows'],document['summary']['excluded'],
+                                  document['summary']['decided'],document['summary']['approved']))
+        with closing(sqlite3.connect(self.store.db_path)) as db:
+            after=db.execute('SELECT proposal,corrections FROM rows WHERE id=?',('r-1',)).fetchone()
+        self.assertEqual(before,after)
+        event=self.store.history(self.doc['id'])[-1]
+        self.assertEqual('row_reviewed',event['event_type']);self.assertTrue(event['payload']['exclusion_confirmed'])
+        self.assertFalse(event['payload']['printed_OCR_modified']);self.assertTrue(self.store.verify_audit())
+
+    def test_exclusion_requires_real_checkbox_reason_reviewer_and_current_revision(self):
+        self.prepare();original_revision=self.doc['revision']
+        for confirmation in [False,None,1,'true']:
+            with self.subTest(confirmation=confirmation):
+                with self.assertRaises(PrototypeError):
+                    self.store.review_row(self.doc['id'],'r-1','exclude',{},'not a product','qa',original_revision,
+                                          exclusion_confirmed=confirmation)
+        for note,actor in [('   ','qa'),(None,'qa'),([],'qa'),('not a product',''),('not a product',None),('not a product',True)]:
+            with self.assertRaises(PrototypeError):
+                self.store.review_row(self.doc['id'],'r-1','exclude',{},note,actor,original_revision,True)
+        with self.assertRaises(PrototypeError) as rejected:
+            self.store.review_row(self.doc['id'],'r-1','exclude',{'quantity':'999'},'not a product','qa',original_revision,True)
+        self.assertEqual('EXCLUSION_CORRECTIONS',rejected.exception.code)
+        self.doc=self.store.review_row(self.doc['id'],'r-1','exclude',{},'not a product','qa',original_revision,True)
+        with self.assertRaises(PrototypeError) as stale:
+            self.store.review_row(self.doc['id'],'r-1','exclude',{},'old revision','qa',original_revision,True)
+        self.assertEqual('REVISION_CONFLICT',stale.exception.code)
+
+    def test_restoring_excluded_goods_revalidates_original_goods_fields(self):
+        result=self.result();result['rows'][0]['fields']['quantity']['normalized']=None
+        self.doc=self.store.install_result(self.doc['id'],result)
+        self.doc=self.store.review_row(self.doc['id'],'r-1','exclude',{},'mistaken footer candidate','qa',self.doc['revision'],True)
+        with self.assertRaises(PrototypeError) as missing:self.review('approve')
+        self.assertEqual('REQUIRED_FIELDS',missing.exception.code)
+        document=self.review('correct',{'quantity':'3'},'source shows an actual product')
+        row=document['rows'][0]
+        self.assertEqual(('corrected','purchase'),(row['decision'],row['line_kind']))
+        self.assertNotIn('disposition',row);self.assertNotIn('original_line_kind',row)
+        self.assertEqual(1,document['summary']['approved_goods'])
+
+    def test_exclude_footer_add_missing_goods_and_export_only_confirmed_goods(self):
+        result=self.result()
+        footer=copy.deepcopy(result['rows'][0]);footer['id']='footer';footer['fields']['quantity']['normalized']=None
+        footer['fields']['invoice_date']={'raw':'TOTAL 2026-02-31','normalized':'2026-02-31'}
+        context={'id':'context','page_id':'original-page-1','line_kind':'context','fields':{'description':{'raw':'INVOICE HEADER','normalized':'INVOICE HEADER'}}}
+        result['rows'] += [footer,context]
+        self.doc=self.store.install_result(self.doc['id'],result)
+        self.review('approve')
+        self.doc=self.store.review_row(self.doc['id'],'footer','exclude',{},'ยอดรวมท้ายใบ ไม่ใช่สินค้า','qa',self.doc['revision'],True)
+        self.doc=self.store.review_row(self.doc['id'],'context','approve',{},'checked source header and lines','qa',self.doc['revision'])
+        self.doc=self.store.add_review_row(self.doc['id'],{'product_code':'TEST-002','quantity':'4','unit':'box'},
+                                            'missed product line below TEST-001','qa',self.doc['revision'],'original-page-1')
+        with self.assertRaises(PrototypeError):self.export()
+        manual=self.doc['rows'][-1]
+        self.doc=self.store.review_row(self.doc['id'],manual['id'],'approve',{},'checked missing source line','qa',self.doc['revision'])
+        summary=self.doc['summary']
+        self.assertEqual((4,2,1,1,4,2),(summary['rows'],summary['goods_rows'],summary['context_rows'],
+                                      summary['excluded'],summary['decided'],summary['approved_goods']))
+        bundle=self.export()
+        self.assertEqual([self.doc['rows'][0]['id'],manual['id']],[r['id'] for r in bundle['goods_rows']])
+        self.assertEqual(['footer'],[r['id'] for r in bundle['excluded_rows']])
+        self.assertEqual(['context'],[r['id'] for r in bundle['context_rows']])
+        self.assertEqual(4,len(bundle['rows']))
+        self.assertEqual('TOTAL 2026-02-31',bundle['excluded_rows'][0]['fields']['invoice_date']['raw'])
+        self.assertFalse(bundle['excluded_rows'][0]['field_values_attested_correct'])
+        self.assertTrue(self.store.verify_audit());self.assertFalse(bundle['posting_authorized'])
+
+    def test_excluding_every_goods_row_does_not_make_context_exportable(self):
+        result=self.result();result['rows'].append({'id':'context','page_id':'original-page-1','line_kind':'context','fields':{}})
+        self.doc=self.store.install_result(self.doc['id'],result)
+        self.doc=self.store.review_row(self.doc['id'],'r-1','exclude',{},'only a footer','qa',self.doc['revision'],True)
+        self.doc=self.store.review_row(self.doc['id'],'context','approve',{},'header checked','qa',self.doc['revision'])
+        self.assertEqual((2,0),(self.doc['summary']['decided'],self.doc['summary']['goods_rows']))
+        self.assertFalse(self.doc['summary']['exportable'])
+        with self.assertRaises(PrototypeError):self.export()
+
     def test_completeness_requires_explicit_boolean_and_current_source_revision(self):
         self.prepare();self.review()
         for value in [False,None,1,'true']:

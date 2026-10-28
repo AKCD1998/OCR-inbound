@@ -35,13 +35,14 @@
           <div class="page-toolbar"><button id="previous-page" class="secondary" aria-label="หน้าก่อน">←</button><select id="page-select" aria-label="เลือกหน้าเอกสาร"></select><button id="next-page" class="secondary" aria-label="หน้าถัดไป">→</button><button id="fit-page" class="secondary">เต็มใบ</button><button id="focus-field" class="secondary">ขยายจุดที่เลือก</button></div>
           <div id="page-stage" class="page-stage"></div>
           <p id="coordinate-note" class="coordinate-note"></p>
-          <div class="legend"><span><i class="dot pending"></i>รอยืนยัน</span><span><i class="dot issue"></i>มีประเด็น / พักไว้</span><span><i class="dot approved"></i>ผู้ตรวจยืนยันแล้ว</span></div>
+          <div class="legend"><span><i class="dot pending"></i>รอยืนยัน</span><span><i class="dot issue"></i>มีประเด็น / พักไว้</span><span><i class="dot approved"></i>ผู้ตรวจยืนยันแล้ว</span><span><i class="dot excluded"></i>ไม่นับเป็นสินค้า</span></div>
           <p class="small paper-note">กดกรอบบนภาพเพื่อเปิดช่องนั้น สีแสดงสถานะการตรวจครั้งสุดท้าย ไม่ใช่คะแนนความแม่นยำของ OCR</p>
         </section>
         <section class="review-panel">
           <div id="document-summary" class="summary-strip"></div>
+          <p class="small summary-scope">ยอดแถวแยกสินค้า ข้อความประกอบ และแถวที่ผู้ตรวจไม่นับเป็นสินค้า ไม่ใช่จำนวนรายการที่ OCR อ่านถูก</p>
           <details id="add-row-details" class="add-row-details"><summary>+ เพิ่มรายการที่ตกหล่นจากเอกสาร</summary><p class="small">เพิ่มจากต้นฉบับหน้าที่กำลังเปิด รายการนี้จะมีป้ายว่าคุณเพิ่มจากเอกสาร แล้วนำไปตรวจยืนยันเหมือนรายการอื่น</p><div id="add-row-fields" class="add-row-fields"></div><label for="add-row-note" class="small">เหตุผล / ตำแหน่งในต้นฉบับ</label><textarea id="add-row-note" placeholder="เช่น รายการลำดับ 8 ใต้แถวที่ระบบอ่านได้…"></textarea><button id="add-row-submit">เพิ่มรายการไว้ตรวจยืนยัน</button><p id="add-row-status" class="small"></p></details>
-          <div class="row-toolbar"><label for="row-filter">แสดงรายการ</label><select id="row-filter"><option value="all">ทั้งหมดในหน้านี้</option><option value="pending">ที่ยังไม่ได้ยืนยัน</option><option value="issues">ที่มีประเด็น / พักไว้</option><option value="approved">ที่ยืนยันแล้ว</option></select></div>
+          <div class="row-toolbar"><label for="row-filter">แสดงแถว</label><select id="row-filter"><option value="all">ทุกแถวในหน้านี้</option><option value="pending">ที่ยังไม่ได้ตัดสินใจ</option><option value="issues">ที่มีประเด็น / พักไว้</option><option value="approved">ที่ยืนยันข้อมูลแล้ว</option><option value="excluded">ที่ไม่นับเป็นสินค้า</option></select></div>
           <div id="row-list" class="row-list"></div>
           <article id="row-detail" class="row-detail"><p class="muted">เลือกรายการหรือกรอบบนภาพเพื่อดูรายละเอียด</p></article>
         </section>
