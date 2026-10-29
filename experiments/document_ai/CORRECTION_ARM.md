@@ -94,3 +94,28 @@ weaker threshold or a changed reference.
 Current actual pilot and full-run results are recorded in the private run
 receipts and living status documents. No experimental revision is automatically
 adopted in production.
+
+## Source cell and document components
+
+Two optional, explicitly pinned components extend the same correction runner:
+
+- `document_source_admission.py` checks literal whole titles and source table
+  structure before admitting an otherwise unclassified document. Negative titles
+  remain vetoes even when an older parser assigned their tokens to fields.
+- `source_cell_association.py` derives logical cell regions from actual table
+  regions or literal headings and existing source-matched rows. These are content
+  regions, not claims of measured physical cell borders. All canonical neighbours,
+  including protected or unknown rows, remain negative ownership barriers.
+
+The guard reconstructs each source proof independently, preserves whole reader
+detections and same-baseline ownership, and applies only accepted field changes.
+Overlapping route proposals are deduplicated; disagreement abstains. The
+original document, row order and non-admitted fields remain intact. These
+components neither read new image text nor change the saved OCR cache.
+
+Cell-only, document-only and combined arms each completed the frozen 38-page
+paired evaluation: **148/256 before and after**, with zero fixes, losses, new
+wrong values or labelled absence false fills. All owned children closed and
+the shared lock was released. Classification eligibility alone and additional
+cell proposals did not improve endpoint fields. The full 484-image gate stayed
+closed for all three arms; they are experimental and are not adopted defaults.

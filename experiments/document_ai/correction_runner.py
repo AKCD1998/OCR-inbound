@@ -26,6 +26,8 @@ SCOPE={'pages':484,'product_present':585,'all_present':602,'critical':329,'suppl
 RUNTIME_KEYS=('cache','frame_io','sources')
 LEGACY_CORRECTION_SOURCES={'bridge':'a0ba699ee400ff8c60828b5dc78c5aba35851aeedebbb40c99656d0eb14ec73b',
  'guard':'96ec134180bdc7a0e35317abe2c0752c717cd116afdba8451e98944e6bd090a4'}
+COMPONENT_MODULES={'document_admission':'document_source_admission',
+                   'cell_association':'source_cell_association'}
 
 def same(a,b):return isinstance(a,dict) and isinstance(b,dict) and record_key(a)==record_key(b)
 
@@ -54,7 +56,11 @@ def preflight(experiment_record,check=checked):
         if spec[key]['sha256']!=value:raise ValueError('Frozen source/control identity changed: '+key)
         check(spec[key])
     required={'runner','bridge','guard','frozen_eval_runner'}
-    if set(spec['sources']) not in (required,required|{'eligibility'}):raise ValueError('Explicit new source closure required')
+    active=spec.get('active_components',[])
+    if (not isinstance(active,list) or any(type(name) is not str for name in active) or len(set(active))!=len(active)
+      or any(name not in COMPONENT_MODULES for name in active)
+      or set(spec['sources']) not in (required|set(active),required|{'eligibility'}|set(active))
+      or active and 'eligibility' not in spec['sources']):raise ValueError('Explicit bounded component/source closure required')
     if ('eligibility' in spec['sources'])!=('eligibility_policy' in spec):raise ValueError('Explicit eligibility policy/source binding required')
     if 'eligibility' in spec['sources'] and not same(spec['eligibility_policy'],spec['sources']['eligibility']):raise ValueError('Eligibility policy/source differs')
     if 'eligibility' not in spec['sources'] and any(spec['sources'][key]['sha256']!=value for key,value in LEGACY_CORRECTION_SOURCES.items()):
@@ -105,6 +111,22 @@ def load_eligibility(spec,check=checked):
     if sys.modules.get('correction_eligibility') is not module or Path(module.__file__).resolve()!=actual or sha(actual)!=record['sha256']:
         raise ValueError('Actual correction eligibility import/source differs')
     return module
+
+
+def load_components(spec,check=checked):
+    """Resolve only explicitly selected, hash-bound experimental components."""
+    result={}
+    for role in spec.get('active_components',[]):
+        name=COMPONENT_MODULES[role];record=spec['sources'][role]
+        actual=Path(check(record)).resolve();existing=sys.modules.get(name)
+        if existing is not None and (not getattr(existing,'__file__',None)
+          or Path(existing.__file__).resolve()!=actual or sha(actual)!=record['sha256']):
+            raise ValueError('Unapproved preloaded component: '+role)
+        module=existing if existing is not None else load(name,actual)
+        if (sys.modules.get(name) is not module or Path(module.__file__).resolve()!=actual
+          or sha(actual)!=record['sha256']):raise ValueError('Actual component import/source differs: '+role)
+        result[role]=module
+    return result
 
 def pilot_gate(spec_record,spec,score_record,closed_record,check=checked):
     score=read(check(score_record));closed=read(check(closed_record))
@@ -167,13 +189,16 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
     bridge=guard=helpers=None
     if variant=='candidate':
         load_eligibility(spec)
-        helpers=runtime(profile);bridge=load('correction_bridge',checked(spec['sources']['bridge']));guard=load('correction_guard',checked(spec['sources']['guard']))
+        helpers=runtime(profile);bridge=load('correction_bridge',checked(spec['sources']['bridge']))
+        helpers.update(load_components(spec));helpers['correction_bridge']=bridge
+        guard=load('correction_guard',checked(spec['sources']['guard']))
     cache={p['page_number']:p for p in read(checked(profile['pins']['cache']))['pages']}
     expected={x['page_number']:x for x in control['source_inventory']};seen=set();inventory=[]
     counts={'accepted_field_revisions':0,'nonempty_replacements':0,'missing_fills':0,'source_provenance_only_changes':0}
     run={'contract':'document-ai-source-correction-parser.v1','experiment':experiment_record,'profile':spec['profile'],
       'native_summary':spec['native_summary'],'baseline_complete':spec['baseline_complete'],'baseline_prediction':spec['baseline_prediction'],
       'panel':spec['panel'],'scope':scope,'variant':variant,'new_correction_policy':spec['sources']['guard'],
+      'active_components':deepcopy(spec.get('active_components',[])),
       'old_missing_only_policy_modified':False,'reference_access':False,'new_OCR_calls':0,'new_model_calls':0,'source_image_decodes':0,
       'pilot_score':pilot_score,'pilot_closed':pilot_closed}
     save(out/'run_manifest.json',run)

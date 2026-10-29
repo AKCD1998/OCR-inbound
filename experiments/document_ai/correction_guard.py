@@ -11,8 +11,9 @@ import re
 
 from eval_geometry import assign, digest, normalize
 from correction_eligibility import assess_row
+from component_common import valid_box
 
-VERSION = 'source-bound-quantity-unit-revisions.v4'
+VERSION = 'source-bound-quantity-unit-revisions.v6'
 ROLES = frozenset(('quantity', 'unit'))
 
 
@@ -111,6 +112,93 @@ def _description_gap(proof, primary, anchor_box, table, core, rules, size):
             raise ValueError('competing_neutral_heading_inside_description_gap')
 
 
+def _source_cell_proof(before,row_index,role,field,evidence,cache,observation,helpers,observation_pin,source):
+    policy=helpers.get('cell_association')
+    if policy is None:
+        raise ValueError('explicit_source_cell_component_required')
+    geometry=cache.get('geometry') or {}
+    if geometry.get('machine_only') is not True or geometry.get('vision_LLM_calls')!=0:
+        raise ValueError('machine_only_source_geometry_required')
+    context=policy.verify(before,cache,observation,helpers,observation_pin,row_index,role,evidence)
+    rules,core=helpers['rules'],helpers['core'];primary,secondary,alternatives=source
+    band=context['source_band'];anchor=context['anchor'];region=context['region']
+    if (not valid_box(band,geometry['upright_size']) or not valid_box(region['bbox'],geometry['upright_size'])
+            or not rules._inside(band,region['bbox']) or band!=field.get('source_header_column_and_row_band')
+            or evidence.get('source_header_band')!=band or evidence.get('row_index')!=row_index
+            or evidence.get('field')!=role or evidence.get('native_cells_used')!=0
+            or evidence.get('physical_cell_borders_claimed') is not False):
+        raise ValueError('source_derived_cell_geometry_or_identity_differs')
+    model=field.get('model_geometry_evidence') or {}
+    if (model.get('native_observation')!=observation_pin or model.get('region')!=region
+            or model.get('native_cells_used')!=0 or model.get('physical_cell_borders_claimed') is not False
+            or any(k in model for k in ('cell_id','table_id','row'))
+            or field.get('association_basis')!='SOURCE_HEADER_ROW_BAND'):
+        raise ValueError('derived_cell_cannot_claim_native_cell_identity')
+    desc=(before['product_rows'][row_index].get('fields') or {}).get('description') or {}
+    lookup={t['token_id']:t for t in primary};ids=evidence.get('anchor_token_ids') or []
+    desc_ids=desc.get('token_ids') or [s.get('token_id') for s in desc.get('source_spans',[]) if isinstance(s,dict)]
+    words=[lookup[k] for k in ids if k in lookup]
+    if (not ids or len(words)!=len(set(ids)) or set(ids)!=set(desc_ids)
+            or [t['token_id'] for t in anchor['tokens']]!=ids
+            or any(not _same_token(t,lookup[t['token_id']]) for t in anchor['tokens'])):
+        raise ValueError('source_cell_name_detection_identity_differs')
+    box=[min(t['bbox'][0] for t in words),min(t['bbox'][1] for t in words),
+         max(t['bbox'][2] for t in words),max(t['bbox'][3] for t in words)]
+    literal=''.join(t['text'] for t in sorted(words,key=lambda t:(rules._cy(t['bbox']),t['bbox'][0],t['token_id'])))
+    if (box!=rules._box(desc.get('bbox')) or box!=anchor['token']['bbox']
+            or _literal(literal)!=_literal(desc.get('raw_value')) or not rules._name(literal)
+            or any(t['confidence']<.70 for t in words) or not rules._inside(box,region['bbox'])
+            or band[1]<box[1]-.75*rules._height(box)-1e-6
+            or band[3]>box[3]+.75*rules._height(box)+1e-6
+            or not band[1]<=rules._cy(box)<=band[3]):
+        raise ValueError('whole_source_name_and_bounded_row_proof_required')
+    # Even an unconfirmed neighbour is a barrier. A failed name match must
+    # not erase an existing row and expose its unowned quantity/unit tokens.
+    cy=rules._cy(box);height=rules._height(box)
+    for index,row in enumerate(before.get('product_rows',[])):
+        if index==row_index:
+            continue
+        other=rules._box(((row.get('fields') or {}).get('description') or {}).get('bbox'))
+        if other is None or not valid_box(other,geometry['upright_size']):
+            continue
+        other_cy=rules._cy(other)
+        if abs(other_cy-cy)<=.75*max(height,rules._height(other)):
+            raise ValueError('ambiguous_neighbouring_canonical_source_rows')
+        midpoint=(cy+other_cy)/2
+        if (other_cy<cy and band[1]<midpoint-1e-6
+                or other_cy>cy and band[3]>midpoint+1e-6):
+            raise ValueError('source_band_crosses_canonical_neighbour_barrier')
+    header=evidence.get('role_header_tokens') or []
+    if (not header or any(t.get('token_id') not in lookup or not _same_token(t,lookup[t['token_id']])
+                         or lookup[t['token_id']]['confidence']<.70 for t in header)
+            or core._role(' '.join(t['text'] for t in sorted(header,key=lambda t:t['bbox'][0])))!=role
+            or max(t['bbox'][3] for t in header)>band[1]):
+        raise ValueError('actual_source_cell_literal_role_heading_required')
+    # Independent cached read; evidence/candidate strings never become answers.
+    value,reason=rules._read_cell(band,primary,secondary,anchor,role,alternatives)
+    if value is None:
+        raise ValueError('source_read_rejected:'+str(reason))
+    a,b=value['tokens']
+    if any(max(0,min(box[3],t['bbox'][3])-max(box[1],t['bbox'][1]))
+           <.5*min(rules._height(box),rules._height(t['bbox'])) for t in (a,b)):
+        raise ValueError('whole_value_not_on_proven_source_name_baseline')
+    if (field.get('human_approved') is not False or field.get('human_verified',False) is not False
+            or field.get('business_correction_applied',False) is not False
+            or field.get('quantity_multiplication_applied',False) is not False
+            or field.get('raw_value')!=a['text'] or field.get('normalized_value')!=value['normalized_value']
+            or field.get('bbox')!=a['bbox'] or field.get('token_ids')!=[a['token_id']]
+            or field.get('engine')!=a['engine'] or field.get('confidence')!=a['confidence']
+            or field.get('source_bbox_kind')!='whole_actual_detection'
+            or not _same_token(field.get('corroborating_observation'),b)
+            or a['confidence']<.95 or b['confidence']<.70 or set(a['aliases'])&set(b['aliases'])
+            or any(not rules._inside(t['bbox'],band) for t in (a,b))):
+        raise ValueError('candidate_literal_or_dual_source_differs')
+    spans=field.get('source_spans') or []
+    if len(spans)!=1 or not _same_token(spans[0],a):
+        raise ValueError('whole_primary_source_span_required')
+    return [a,b]
+
+
 def _proof(before, row_index, role, field, evidence, cache, observation,
            helpers, observation_pin, regions, cells, source):
     rules, core = helpers['rules'], helpers['core']
@@ -122,6 +210,9 @@ def _proof(before, row_index, role, field, evidence, cache, observation,
         raise ValueError('explicit_candidate_and_source_proof_required')
     if field.get('human_approved') is not False:
         raise ValueError('unreviewed_machine_candidate_required')
+    if evidence.get('route')=='SOURCE_HEADER_ROW_BAND':
+        return _source_cell_proof(before,row_index,role,field,evidence,cache,observation,
+                                  helpers,observation_pin,source)
     native = field.get('model_geometry_evidence') or {}
     if native.get('native_observation') != observation_pin:
         raise ValueError('native_source_pin_differs')
@@ -256,10 +347,23 @@ def conserve_corrections(before, candidate, cache, observation, helpers, observa
             or before.get('coordinate_space') != 'upright_image'
             or before.get('source_sha256') != cache.get('source_sha256')
             or before.get('page_number') != cache.get('page_number')
-            or before.get('image_size') != (cache.get('geometry') or {}).get('upright_size')
-            or (before.get('document') or {}).get('document_type') != 'invoice_or_delivery'):
+            or before.get('image_size') != (cache.get('geometry') or {}).get('upright_size')):
         audit['rejected_changes'].append({'reason':'machine_only_invoice_frame_required'})
         return result, audit
+    classifier=helpers.get('document_admission')
+    if classifier is not None:
+        admission=classifier.assess_document(before,cache,helpers['rules'],helpers['core'],
+            observation=observation,observation_pin=observation_pin)
+        if digest([before,candidate,cache,observation]) != started:
+            raise ValueError('Document admission mutated correction inputs')
+        audit['document_admission']=deepcopy(admission)
+        if (admission.get('eligible') is not True or admission.get('reference_access') is not False
+                or admission.get('canonical_document_type_modified') is not False):
+            audit['rejected_changes'].append({'reason':'document_source_admission_rejected'})
+            return result,audit
+    elif (before.get('document') or {}).get('document_type') != 'invoice_or_delivery':
+        audit['rejected_changes'].append({'reason':'machine_only_invoice_frame_required'})
+        return result,audit
     regions, cells = normalize(observation, cache)
     raw = candidate.get('document_ai_correction_association') or {}
     if _identity(before) != _identity(candidate):

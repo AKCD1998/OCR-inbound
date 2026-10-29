@@ -85,6 +85,23 @@ class CorrectionRunner(unittest.TestCase):
                 bad['sources']['bridge']=c.pin(module)
             record=add('bad-'+scenario,bad)
             with self.subTest(scenario=scenario),self.assertRaises(ValueError):runner.preflight(record,check)
+        component=add('source-component',{})
+        # Additional components require an exact selected source closure; a
+        # pinned but disabled module may not silently alter the parser.
+        valid=deepcopy(v2)
+        valid['active_components']=['document_admission']
+        valid['sources']['document_admission']=component
+        result=runner.preflight(add('with-component',valid),check)
+        self.assertEqual(12,len(result[3]))
+        for scenario in ('missing-source','disabled-source','duplicate','unknown','not-a-name'):
+            bad=deepcopy(valid)
+            if scenario=='missing-source':bad['sources'].pop('document_admission')
+            elif scenario=='disabled-source':bad['active_components']=[]
+            elif scenario=='duplicate':bad['active_components']*=2
+            elif scenario=='unknown':bad['active_components']=['unreviewed_component']
+            else:bad['active_components']=[{}]
+            with self.subTest(component=scenario),self.assertRaises(ValueError):
+                runner.preflight(add('invalid-component-'+scenario,bad),check)
 
     def test_eligibility_dependency_is_exact_pinned_import_and_rejects_preloaded_foreign_source(self):
         path=self.root/'correction_eligibility.py';path.write_text('def assess_row(row, rules):\n    return {"eligible": False}\n',encoding='utf8')
@@ -111,6 +128,30 @@ class CorrectionRunner(unittest.TestCase):
         with patch.dict(sys.modules),patch.object(runner,'load',side_effect=changed):
             sys.modules.pop('correction_eligibility',None)
             with self.assertRaises(ValueError):runner.load_eligibility(spec)
+
+    def test_component_imports_are_explicit_and_origin_hash_bound(self):
+        for role,name in runner.COMPONENT_MODULES.items():
+            path=self.root/(name+'.py');path.write_text('MARKER = "synthetic"\n',encoding='utf8')
+            spec={'sources':{role:c.pin(path)},'active_components':[role]}
+            with self.subTest(role=role),patch.dict(sys.modules):
+                sys.modules.pop(name,None)
+                modules=runner.load_components(spec)
+                self.assertEqual('synthetic',modules[role].MARKER)
+                self.assertEqual(path.resolve(),Path(modules[role].__file__).resolve())
+                self.assertIs(modules[role],runner.load_components(spec)[role])
+                sys.modules[name]=types.SimpleNamespace(__file__=str(self.root/'foreign.py'))
+                with self.assertRaises(ValueError):runner.load_components(spec)
+        self.assertEqual({},runner.load_components({'sources':{}}))
+
+    def test_component_source_cannot_change_during_import(self):
+        path=self.root/'document_source_admission.py';path.write_text('VALUE=1\n',encoding='utf8')
+        spec={'sources':{'document_admission':c.pin(path)},'active_components':['document_admission']}
+        def changed(name,actual):
+            actual.write_text('VALUE=2\n',encoding='utf8')
+            module=types.SimpleNamespace(__file__=str(actual));sys.modules[name]=module;return module
+        with patch.dict(sys.modules),patch.object(runner,'load',side_effect=changed):
+            sys.modules.pop('document_source_admission',None)
+            with self.assertRaises(ValueError):runner.load_components(spec)
 
     def test_nonempty_replacements_are_distinct_from_fills_and_provenance_updates(self):
         before={'product_rows':[{'fields':{'quantity':{'raw_value':'1','normalized_value':1},'unit':None}},

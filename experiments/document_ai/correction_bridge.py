@@ -12,7 +12,7 @@ from statistics import median
 from eval_geometry import assign, digest, normalize
 from correction_eligibility import BONUS, assess_row
 
-VERSION = 'document-ai-source-corrections.v4'
+VERSION = 'document-ai-source-corrections.v6'
 LIMIT = 256
 EDITABLE = ('quantity', 'unit')
 
@@ -189,7 +189,7 @@ def _field(value, role, before, evidence, observation_pin):
         'human_approved': False, 'review_flags': ['experimental_source_correction_requires_final_review']}
 
 
-def propose_and_apply(page, cache, observation, helpers, observation_pin):
+def _native_propose_and_apply(page, cache, observation, helpers, observation_pin):
     """Return a conserved copy plus bounded proposal, rejection and revision audit."""
     frozen = digest([page, cache, observation]);out = deepcopy(page)
     rules, core, foreign = (helpers[k] for k in ('rules', 'core', 'owners'))
@@ -226,8 +226,18 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
         reject('SOURCE_FRAME_OR_NATIVE_PROVENANCE_REJECTED', evidence={'error_type': type(exc).__name__})
         audit['status'] = 'SOURCE_FRAME_REJECTED';return out
     if (page.get('source_sha256') != cache['source_sha256'] or page.get('page_number') != cache['page_number'] or
-        page.get('coordinate_space') != 'upright_image' or page.get('image_size') != cache['geometry']['upright_size'] or
-        (page.get('document') or {}).get('document_type') != 'invoice_or_delivery'):
+        page.get('coordinate_space') != 'upright_image' or page.get('image_size') != cache['geometry']['upright_size']):
+        reject('ESTABLISHED_INVOICE_UPRIGHT_SOURCE_FRAME_REQUIRED');return out
+    classifier=helpers.get('document_admission')
+    if classifier is not None:
+        admission=classifier.assess_document(page,cache,rules,core,
+            observation=observation,observation_pin=observation_pin)
+        if digest([page,cache,observation]) != frozen:
+            raise ValueError('Document admission mutated retained evidence')
+        audit['document_admission']=deepcopy(admission)
+        if admission.get('eligible') is not True:
+            reject('DOCUMENT_SOURCE_ADMISSION_REJECTED');return out
+    elif (page.get('document') or {}).get('document_type') != 'invoice_or_delivery':
         reject('ESTABLISHED_INVOICE_UPRIGHT_SOURCE_FRAME_REQUIRED');return out
     if observation.get('component') != 'docling' or not cells:
         reject('USABLE_SOURCE_BOUND_NATIVE_TABLE_CELLS_REQUIRED');return out
@@ -391,4 +401,50 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
     audit['status'] = 'APPLIED' if audit['changes'] else 'ABSTAINED'
     if digest([page, cache, observation]) != frozen:
         raise ValueError('Correction bridge mutated retained input evidence')
+    return out
+
+
+def propose_and_apply(page, cache, observation, helpers, observation_pin):
+    """Combine explicit source-cell proposals without changing native evidence."""
+    native=_native_propose_and_apply(page,cache,observation,helpers,observation_pin)
+    cells=helpers.get('cell_association')
+    if cells is None:
+        return native
+    frozen=digest([page,cache,observation])
+    source=cells.propose(page,cache,observation,helpers,observation_pin)
+    if digest([page,cache,observation])!=frozen:
+        raise ValueError('Source cell association mutated retained inputs')
+    native_audit=native['document_ai_correction_association']
+    audit={'contract':VERSION,'status':'ABSTAINED','proposed':[],
+        'accepted':[],'rejected':[],'changes':[], 'native_route':deepcopy(native_audit),
+        'source_cell_route':deepcopy(source),'new_OCR_calls':0,'new_model_calls':0,
+        'reference_access':False,'assistant_image_reads':False,'human_approved':False,
+        'truncated_decisions':0,'source_confidence_gates':[.95,.70],
+        'nonempty_correction_enabled':True}
+    if 'document_admission' in native_audit:
+        audit['document_admission']=deepcopy(native_audit['document_admission'])
+    out=deepcopy(page);out['document_ai_correction_association']=audit
+    raw_proposals=native_audit.get('proposed',[])+source.get('proposed',[])
+    audit['proposed']=deepcopy(raw_proposals[:LIMIT])
+    audit['truncated_decisions']=max(0,len(raw_proposals)-LIMIT)
+    audit['rejected']=deepcopy((native_audit.get('rejected',[])+source.get('rejected',[]))[:LIMIT])
+    groups={}
+    for change in native_audit.get('changes',[])+source.get('changes',[]):
+        key=(change['row_index'],change['field']);groups.setdefault(key,[]).append(change)
+    if len(groups)>LIMIT:
+        audit['rejected'].append({'reason':'bounded_combined_change_inventory_required'})
+        audit['truncated_decisions']+=len(groups)-LIMIT
+        return out
+    for key,variants in sorted(groups.items()):
+        literal=[tuple(digest(v['candidate'].get(k)) for k in ('raw_value','normalized_value','token_ids','bbox')) for v in variants]
+        if len(set(literal))!=1:
+            audit['rejected'].append({'row_index':key[0],'field':key[1],
+                'reason':'INDEPENDENT_ASSOCIATION_ROUTES_DISAGREE'})
+            continue
+        # Prefer the stricter native proof when both routes use the same
+        # whole detection. The guard independently resolves joint ownership.
+        change=deepcopy(variants[0])
+        out['product_rows'][key[0]].setdefault('fields',{})[key[1]]=deepcopy(change['candidate'])
+        audit['accepted'].append(change);audit['changes'].append(deepcopy(change))
+    audit['status']='PROPOSED' if audit['changes'] else 'ABSTAINED'
     return out

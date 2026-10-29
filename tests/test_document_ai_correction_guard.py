@@ -198,6 +198,41 @@ class CorrectionConservationTests(unittest.TestCase):
         self.assertEqual(revised,self.page)
         self.assertEqual(audit['accepted_changes'],[])
 
+    def document_helpers(self):
+        import document_source_admission
+        self.cache['geometry'].update(machine_only=True,vision_LLM_calls=0)
+        self.cache['working_tokens'].append({'token_id':'p:document-title','text':'INVOICE',
+            'box':[40,20,200,40],'confidence':.99,'engine':'PADDLE_TH'})
+        return {**HELPERS,'document_admission':document_source_admission}
+
+    def test_printed_document_admission_preserves_original_unclassified_metadata(self):
+        helpers=self.document_helpers();self.page['document']['document_type']='unclassified'
+        before=deepcopy(self.page)
+        proposed=propose_and_apply(self.page,self.cache,self.observation,helpers,PIN)
+        revised,audit=conserve_corrections(self.page,proposed,self.cache,self.observation,helpers,PIN)
+        self.assertEqual(4,len(audit['accepted_changes']),audit)
+        self.assertTrue(audit['document_admission']['eligible'])
+        self.assertEqual(before['document'],revised['document'])
+        self.assertEqual(before,self.page)
+
+    def test_guard_rechecks_negative_document_title_in_actual_source(self):
+        proposed=self.bridge()
+        helpers=self.document_helpers()
+        self.cache['working_tokens'][ -1 ]['text']='CREDIT NOTE'
+        revised,audit=conserve_corrections(self.page,proposed,self.cache,self.observation,helpers,PIN)
+        self.assertEqual([],audit['accepted_changes'])
+        self.assertEqual(self.page,revised)
+        self.assertFalse(audit['document_admission']['eligible'])
+
+    def test_candidate_document_approval_annotation_is_not_authority(self):
+        proposed=self.bridge()
+        helpers=self.document_helpers();self.page['document']['document_type']='unclassified'
+        self.cache['working_tokens'][ -1 ]['confidence']=.94
+        proposed['document_ai_correction_association']['document_admission']={'eligible':True}
+        revised,audit=conserve_corrections(self.page,proposed,self.cache,self.observation,helpers,PIN)
+        self.assertEqual([],audit['accepted_changes'])
+        self.assertEqual(self.page,revised)
+
     def test_source_identity_and_frame_are_rechecked_without_trusting_bridge(self):
         proposed=self.bridge()
         for key,value in (('source_sha256','f'*64),('page_number',999),
