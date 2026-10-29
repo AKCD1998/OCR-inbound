@@ -146,10 +146,18 @@ def apply_cache(path,digest):
     record={'path':str(Path(path).resolve()),'sha256':digest};manifest=read(checked(record))
     root=owned_cache(manifest['cache_root'])
     if sys.dont_write_bytecode is not True:raise ValueError('Native model cache consumption must remain read-only under -B')
-    if manifest.get('verification_mode')=='exact_hash_on_actual_import':
+    mode=manifest.get('verification_mode')
+    if mode in ('exact_hash_on_actual_import','PYC_blob_with_live_source_SHA_on_every_load'):
         if manifest.get('cache_helper',{}).get('sha256')!=sha(__file__):raise ValueError('Actual lazy cache helper bytes differ from selected manifest')
         index=read(checked(manifest['approved_source_index']))
-        observed=install_lazy_checks(manifest,index)
+        if mode=='PYC_blob_with_live_source_SHA_on_every_load':
+            checked(manifest['bundle_helper'])
+            import bytecode_bundle
+            if sha(bytecode_bundle.__file__)!=manifest['bundle_helper']['sha256']:raise ValueError('Actual PYC bundle helper bytes differ')
+            activation=bytecode_bundle.activate_bundle(manifest,index,read(checked(manifest['bytecode_blob_index'])))
+            observed=activation.observed
+            atexit.register(activation.close)
+        else:observed=install_lazy_checks(manifest,index)
         if sys.argv.count('--output')==1:
             output=Path(sys.argv[sys.argv.index('--output')+1]).resolve()
             if output.drive.upper()=='D:' and 'OCR-Experiments' in output.parts:
