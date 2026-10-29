@@ -7,6 +7,7 @@ fields onto a copy of the canonical page. It never revises row identities.
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal,InvalidOperation
 import re
 
 from eval_geometry import assign, digest, normalize
@@ -19,6 +20,19 @@ ROLES = frozenset(('quantity', 'unit'))
 
 def _literal(text):
     return re.sub(r'\s+', '', str(text or '')).casefold()
+
+
+def _same_reading(old,new,role):
+    """Independent literal equivalence; numeric formatting is not disagreement."""
+    if role!='quantity':
+        return (_literal(old['tokens'][0]['text'])==_literal(new['tokens'][0]['text'])
+                and _literal(old['normalized_value'])==_literal(new['normalized_value']))
+    try:
+        values=[Decimal(str(v).replace(',','')) for v in
+                (old['tokens'][0]['text'],new['tokens'][0]['text'],old['normalized_value'],new['normalized_value'])]
+        return all(v.is_finite() for v in values) and values[0]==values[1] and values[2]==values[3]
+    except (InvalidOperation,ValueError,TypeError):
+        return False
 
 
 def _same_token(claim, actual):
@@ -113,13 +127,19 @@ def _description_gap(proof, primary, anchor_box, table, core, rules, size):
 
 
 def _source_cell_proof(before,row_index,role,field,evidence,cache,observation,helpers,observation_pin,source):
-    policy=helpers.get('cell_association')
+    fresh=evidence.get('route')=='FRESH_WHOLE_SOURCE_ROW_BAND'
+    policy=helpers.get('fresh_source_cells' if fresh else 'cell_association')
     if policy is None:
         raise ValueError('explicit_source_cell_component_required')
     geometry=cache.get('geometry') or {}
     if geometry.get('machine_only') is not True or geometry.get('vision_LLM_calls')!=0:
         raise ValueError('machine_only_source_geometry_required')
     context=policy.verify(before,cache,observation,helpers,observation_pin,row_index,role,evidence)
+    if fresh:
+        # The public change carries a wrapper containing both original
+        # geometry and fresh artifact provenance. Verify the wrapper first;
+        # common geometry/name checks use the independently rebuilt context.
+        evidence=context['evidence']
     rules,core=helpers['rules'],helpers['core'];primary,secondary,alternatives=source
     band=context['source_band'];anchor=context['anchor'];region=context['region']
     if (not valid_box(band,geometry['upright_size']) or not valid_box(region['bbox'],geometry['upright_size'])
@@ -132,8 +152,12 @@ def _source_cell_proof(before,row_index,role,field,evidence,cache,observation,he
     if (model.get('native_observation')!=observation_pin or model.get('region')!=region
             or model.get('native_cells_used')!=0 or model.get('physical_cell_borders_claimed') is not False
             or any(k in model for k in ('cell_id','table_id','row'))
-            or field.get('association_basis')!='SOURCE_HEADER_ROW_BAND'):
+            or field.get('association_basis')!=('FRESH_WHOLE_SOURCE_ROW_BAND' if fresh else 'SOURCE_HEADER_ROW_BAND')):
         raise ValueError('derived_cell_cannot_claim_native_cell_identity')
+    if fresh and (field.get('fresh_source_evidence')!=context.get('fresh_source_evidence')
+            or not isinstance(field.get('fresh_source_evidence'),dict)
+            or field.get('extra_independent_engine_families')!=0):
+        raise ValueError('fresh_source_receipts_or_engine_family_claim_differs')
     desc=(before['product_rows'][row_index].get('fields') or {}).get('description') or {}
     lookup={t['token_id']:t for t in primary};ids=evidence.get('anchor_token_ids') or []
     desc_ids=desc.get('token_ids') or [s.get('token_id') for s in desc.get('source_spans',[]) if isinstance(s,dict)]
@@ -175,13 +199,23 @@ def _source_cell_proof(before,row_index,role,field,evidence,cache,observation,he
             or max(t['bbox'][3] for t in header)>band[1]):
         raise ValueError('actual_source_cell_literal_role_heading_required')
     # Independent cached read; evidence/candidate strings never become answers.
-    value,reason=rules._read_cell(band,primary,secondary,anchor,role,alternatives)
+    reads=(context['fresh_primary'],context['fresh_secondary'],context['fresh_alternatives']) if fresh else (primary,secondary,alternatives)
+    value,reason=rules._read_cell(band,*reads[:2],anchor,role,reads[2])
     if value is None:
         raise ValueError('source_read_rejected:'+str(reason))
     a,b=value['tokens']
     if any(max(0,min(box[3],t['bbox'][3])-max(box[1],t['bbox'][1]))
            <.5*min(rules._height(box),rules._height(t['bbox'])) for t in (a,b)):
         raise ValueError('whole_value_not_on_proven_source_name_baseline')
+    if fresh:
+        old_value,_=rules._read_cell(band,primary,secondary,anchor,role,alternatives)
+        if old_value is not None:
+            old_pair=old_value['tokens']
+            qualified=(len(old_pair)==2 and old_pair[0]['confidence']>=.95 and old_pair[1]['confidence']>=.70
+              and all(rules._inside(t['bbox'],band) and max(0,min(box[3],t['bbox'][3])-max(box[1],t['bbox'][1]))
+                >=.5*min(rules._height(box),rules._height(t['bbox'])) for t in old_pair))
+            if qualified and not _same_reading(old_value,value,role):
+                raise ValueError('qualified_original_dual_reader_pair_disagrees_with_fresh_pair')
     if (field.get('human_approved') is not False or field.get('human_verified',False) is not False
             or field.get('business_correction_applied',False) is not False
             or field.get('quantity_multiplication_applied',False) is not False
@@ -210,7 +244,7 @@ def _proof(before, row_index, role, field, evidence, cache, observation,
         raise ValueError('explicit_candidate_and_source_proof_required')
     if field.get('human_approved') is not False:
         raise ValueError('unreviewed_machine_candidate_required')
-    if evidence.get('route')=='SOURCE_HEADER_ROW_BAND':
+    if evidence.get('route') in ('SOURCE_HEADER_ROW_BAND','FRESH_WHOLE_SOURCE_ROW_BAND'):
         return _source_cell_proof(before,row_index,role,field,evidence,cache,observation,
                                   helpers,observation_pin,source)
     native = field.get('model_geometry_evidence') or {}
@@ -335,6 +369,25 @@ def _proof(before, row_index, role, field, evidence, cache, observation,
     return [a, b]
 
 
+def _geometry_foreign_owners(rows,row_index,role,tokens,rules):
+    """Fresh IDs cannot erase another canonical field's whole source box."""
+    result=[]
+    for index,row in enumerate(rows):
+        for name,field in (row.get('fields') or {}).items():
+            if (index==row_index and name==role) or not isinstance(field,dict):
+                continue
+            boxes=[]
+            box=rules._box(field.get('bbox'))
+            if box is not None:boxes.append(box)
+            for span in field.get('source_spans') or []:
+                if isinstance(span,dict):
+                    box=rules._box(span.get('bbox'))
+                    if box is not None:boxes.append(box)
+            if any(rules._intersection(t['bbox'],box) for t in tokens for box in boxes):
+                result.append({'row_index':index,'field':name,'kind':'PRESERVED_CANONICAL_WHOLE_SOURCE_GEOMETRY'})
+    return result
+
+
 def conserve_corrections(before, candidate, cache, observation, helpers, observation_pin):
     """Admit proof-bound revisions onto ``before``, retaining every old field."""
     started = digest([before, candidate, cache, observation])
@@ -404,10 +457,25 @@ def conserve_corrections(before, candidate, cache, observation, helpers, observa
         if any(len(owners[a]) != 1 for t in choices[key]['tokens'] for a in t['aliases']):
             choices.pop(key)
             audit['rejected_changes'].append({'row_index':key[0],'field':key[1],'reason':'ambiguous_new_source_owner'})
+    # Separate rereads have separate IDs even when they detect the same ink.
+    # Treat overlapping whole fresh boxes assigned to two fields as ambiguous.
+    colliding=set()
+    for key,item in choices.items():
+        for other,peer in choices.items():
+            if key>=other or not any(x['change'].get('evidence',{}).get('route')=='FRESH_WHOLE_SOURCE_ROW_BAND' for x in (item,peer)):
+                continue
+            if any(helpers['rules']._intersection(a['bbox'],b['bbox']) for a in item['tokens'] for b in peer['tokens']):
+                colliding.update((key,other))
+    for key in sorted(colliding):
+        choices.pop(key,None)
+        audit['rejected_changes'].append({'row_index':key[0],'field':key[1],'reason':'ambiguous_fresh_whole_source_geometry'})
     while True:
         dropped=[]
         for key,item in choices.items():
-            for owner in helpers['owners']._foreign_owners(rows,key[0],key[1],item['tokens']):
+            foreign=helpers['owners']._foreign_owners(rows,key[0],key[1],item['tokens'])
+            if item['change'].get('evidence',{}).get('route')=='FRESH_WHOLE_SOURCE_ROW_BAND':
+                foreign+=_geometry_foreign_owners(rows,key[0],key[1],item['tokens'],helpers['rules'])
+            for owner in foreign:
                 other=(owner['row_index'],owner['field'])
                 if other[0] != key[0] or other not in choices:
                     dropped.append(key);break

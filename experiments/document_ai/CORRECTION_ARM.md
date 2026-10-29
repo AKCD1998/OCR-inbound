@@ -119,3 +119,38 @@ wrong values or labelled absence false fills. All owned children closed and
 the shared lock was released. Classification eligibility alone and additional
 cell proposals did not improve endpoint fields. The full 484-image gate stayed
 closed for all three arms; they are experimental and are not adopted defaults.
+
+## Fresh whole-region recognition experiment
+
+`fresh_source_cells.py` consumes separately pinned, closed native reads. It
+reconstructs detector polygons, recognizer text and Tesseract word/line data
+from their raw outputs, checks the original source frame and whole-word crop,
+and keeps the saved OCR cache immutable. The guard independently repeats the
+field and ownership checks. Fresh and cached readings from the same engine
+remain one family. A qualified old pair that contradicts a new pair causes
+abstention; incomplete old reads remain ownership and audit evidence.
+
+The source-only inventory contains 60 contexts from six pilot pages. Fixing
+physical crop boundaries to use actual foreign-row edges instead of fractional
+logical midpoints admitted 46 regions; 14 remained held. A one-region canary
+completed before the remaining 45 serial reads. Actual totals were 46 detector
+calls, 70 Thai recognition calls, 46 Tesseract calls and 46 source decodes, with
+zero optimizer updates. The largest measured owned RSS was 718,680,064 bytes,
+within the unchanged 1 GiB cap. All owned processes closed and released the
+shared lock. Native raw files and crop proofs are sealed separately from the
+original cache; parser stages make no new OCR/model calls.
+
+A real one-page parser/scorer/writer test preceded the same 38-page evaluation.
+The result again stayed **148/256 → 148/256**, with zero fixes, losses, new wrong
+values or labelled absence false fills. All 46 reads reached source validation.
+Six qualified fresh pairs reached proposals and already matched the saved
+fields; the other 40 failed whole-band/baseline (18), completeness (8),
+overlapping-view ambiguity (7), confidence (4), or literal-unit (3) checks.
+There were no accepted revisions and no field-proof failures hidden behind a
+page-wide adapter error. The full-484 gate rejected this actual non-gaining
+result, so no full run or default activation followed.
+
+An unselected private experiment projects the existing TSV whole-word spans
+instead of whole lines. Its synthetic tests and coverage diagnostic are not
+endpoint accuracy evidence. No new recognition or evaluation was launched for
+that variant after its diagnostic showed no qualified labelled-wrong fields.

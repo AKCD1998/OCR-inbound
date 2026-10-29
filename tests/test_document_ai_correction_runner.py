@@ -133,8 +133,14 @@ class CorrectionRunner(unittest.TestCase):
         for role,name in runner.COMPONENT_MODULES.items():
             path=self.root/(name+'.py');path.write_text('MARKER = "synthetic"\n',encoding='utf8')
             spec={'sources':{role:c.pin(path)},'active_components':[role]}
+            if role=='fresh_source_cells':
+                for dependency,module_name in runner.FRESH_DEPENDENCIES.items():
+                    dep=self.root/(module_name+'.py');dep.write_text('MARKER = "synthetic dependency"\n',encoding='utf8')
+                    spec['sources'][dependency]=c.pin(dep)
             with self.subTest(role=role),patch.dict(sys.modules):
                 sys.modules.pop(name,None)
+                if role=='fresh_source_cells':
+                    for module_name in runner.FRESH_DEPENDENCIES.values():sys.modules.pop(module_name,None)
                 modules=runner.load_components(spec)
                 self.assertEqual('synthetic',modules[role].MARKER)
                 self.assertEqual(path.resolve(),Path(modules[role].__file__).resolve())

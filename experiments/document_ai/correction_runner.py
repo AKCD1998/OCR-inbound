@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import json
-from pathlib import Path
+from pathlib import Path,PureWindowsPath
 import re
 import sys
 import time
@@ -27,7 +27,13 @@ RUNTIME_KEYS=('cache','frame_io','sources')
 LEGACY_CORRECTION_SOURCES={'bridge':'a0ba699ee400ff8c60828b5dc78c5aba35851aeedebbb40c99656d0eb14ec73b',
  'guard':'96ec134180bdc7a0e35317abe2c0752c717cd116afdba8451e98944e6bd090a4'}
 COMPONENT_MODULES={'document_admission':'document_source_admission',
-                   'cell_association':'source_cell_association'}
+                   'cell_association':'source_cell_association',
+                   'fresh_source_cells':'fresh_source_cells'}
+FRESH_DEPENDENCIES={'fresh_source_protocol':'whole_cell_source',
+                    'fresh_source_derivation':'whole_cell_source_derivation'}
+FRESH_FIXED={'plan':'ad0b3c7fd646875d1bc44a475d98e58c346c91e2e5eb428e8d86f8b53a2afa08',
+ 'native_worker':'b5f498a65e9494f449f6aed9e073aea44958aa5dc22dfe75f0f22451a02324bf',
+ 'configuration':'0f8225ebab510a9675f05bdc581f3e0c5bd81e7d29b99a7c1ef123251acfcd88'}
 
 def same(a,b):return isinstance(a,dict) and isinstance(b,dict) and record_key(a)==record_key(b)
 
@@ -57,10 +63,14 @@ def preflight(experiment_record,check=checked):
         check(spec[key])
     required={'runner','bridge','guard','frozen_eval_runner'}
     active=spec.get('active_components',[])
+    fresh=isinstance(active,list) and 'fresh_source_cells' in active
+    extra=set(FRESH_DEPENDENCIES) if fresh else set()
     if (not isinstance(active,list) or any(type(name) is not str for name in active) or len(set(active))!=len(active)
       or any(name not in COMPONENT_MODULES for name in active)
-      or set(spec['sources']) not in (required|set(active),required|{'eligibility'}|set(active))
+      or set(spec['sources']) not in (required|set(active)|extra,required|{'eligibility'}|set(active)|extra)
       or active and 'eligibility' not in spec['sources']):raise ValueError('Explicit bounded component/source closure required')
+    if fresh and 'cell_association' not in active or fresh!=('fresh_source_manifest' in spec):
+        raise ValueError('Fresh source arm requires original source-cell component and explicit read manifest')
     if ('eligibility' in spec['sources'])!=('eligibility_policy' in spec):raise ValueError('Explicit eligibility policy/source binding required')
     if 'eligibility' in spec['sources'] and not same(spec['eligibility_policy'],spec['sources']['eligibility']):raise ValueError('Eligibility policy/source differs')
     if 'eligibility' not in spec['sources'] and any(spec['sources'][key]['sha256']!=value for key,value in LEGACY_CORRECTION_SOURCES.items()):
@@ -68,6 +78,10 @@ def preflight(experiment_record,check=checked):
     if spec['sources']['runner']['sha256']!=sha(__file__) or spec['sources']['frozen_eval_runner']['sha256']!='1538e7b5ba42cf178c24b70abf6081c5c39d02161afce2fe44b5802ef39eb5f9':
         raise ValueError('Actual correction runner/frozen scorer bridge differs')
     for record in spec['sources'].values():check(record)
+    if fresh:
+        _,eligible,_=fresh_source_metadata(spec,check)
+        if spec.get('fresh_tiny_page')!=next(iter(eligible.values()))['page_number']:
+            raise ValueError('Prospective first-source tiny page required')
     profile=read(check(spec['profile']))
     if profile.get('expected_scope')!=SCOPE:raise ValueError('Fixed585/602/329/57/18/prior323 scope changed')
     for key,value in EXPECTED.items():
@@ -95,10 +109,11 @@ def preflight(experiment_record,check=checked):
       or not same(run.get('native_summary'),spec['native_summary'])):raise ValueError('Canonical saved323 control differs')
     return spec,profile,sources,selected,native,control
 
-def selected_numbers(scope,panel):
+def selected_numbers(scope,panel,tiny_page=None):
     if scope=='panel':return set(panel)
     if scope=='full484':return set(range(1,485))
-    raise ValueError('Explicit panel or full484 required')
+    if scope=='tiny' and type(tiny_page) is int and tiny_page in panel:return {tiny_page}
+    raise ValueError('Explicit panel/full484 or source-bound tiny required')
 
 def load_eligibility(spec,check=checked):
     """Pin the one added dependency before Python resolves bridge imports."""
@@ -116,6 +131,16 @@ def load_eligibility(spec,check=checked):
 def load_components(spec,check=checked):
     """Resolve only explicitly selected, hash-bound experimental components."""
     result={}
+    if 'fresh_source_cells' in spec.get('active_components',[]):
+        for role,name in FRESH_DEPENDENCIES.items():
+            record=spec['sources'][role];actual=Path(check(record)).resolve();existing=sys.modules.get(name)
+            if existing is not None and (not getattr(existing,'__file__',None) or not Path(existing.__file__).is_file() or sha(existing.__file__)!=record['sha256']):
+                raise ValueError('Unapproved preloaded fresh-source dependency: '+role)
+            module=existing if existing is not None else load(name,actual)
+            if (sys.modules.get(name) is not module or not getattr(module,'__file__',None)
+              or sha(module.__file__)!=record['sha256'] or sha(actual)!=record['sha256']):
+                raise ValueError('Actual fresh-source dependency bytes/origin differ: '+role)
+            result['source_crop_protocol' if role=='fresh_source_protocol' else role]=module
     for role in spec.get('active_components',[]):
         name=COMPONENT_MODULES[role];record=spec['sources'][role]
         actual=Path(check(record)).resolve();existing=sys.modules.get(name)
@@ -127,6 +152,126 @@ def load_components(spec,check=checked):
           or sha(actual)!=record['sha256']):raise ValueError('Actual component import/source differs: '+role)
         result[role]=module
     return result
+
+
+def fresh_source_metadata(spec,check=checked):
+    """Source-only complete46 manifest. Raw hashes are sealed by Root after closure."""
+    manifest=read(check(spec['fresh_source_manifest']))
+    required={'contract','plan','derivation_runtime','native_worker','configuration','request_results'}
+    if set(manifest)!=required or manifest['contract']!='document-ai-fresh-whole-source-reads.v1':
+        raise ValueError('Explicit frozen fresh-source manifest required')
+    for key,value in FRESH_FIXED.items():
+        if manifest[key].get('sha256')!=value:raise ValueError('Selected fresh-source native lineage differs: '+key)
+        check(manifest[key])
+    config=read(check(manifest['configuration']))
+    if (not same(config.get('plan'),manifest['plan']) or config.get('derivation_runtime')!=manifest['derivation_runtime']
+      or not same(manifest['derivation_runtime'].get('module'),spec['sources']['fresh_source_derivation'])
+      or spec['sources']['fresh_source_protocol']['sha256']!='7892c593409e2e42908f6bf858ea2da84b18f0a87c8f8810b172b62116800107'):
+        raise ValueError('Fresh read geometry recipe/protocol differs from selected native arm')
+    for record in manifest['derivation_runtime'].values():check(record)
+    plan=read(check(manifest['plan']));eligible={}
+    if plan.get('contract')!='document-ai-whole-cell-source-plan.v1' or plan.get('machine_only') is not True or len(plan.get('requests',[]))!=60:
+        raise ValueError('Original ALL60 source request inventory required')
+    for request in plan['requests']:
+        context=read(check(request['context_proof']))
+        if (context.get('request_binding')!={k:v for k,v in request.items() if k!='context_proof'}
+          or context.get('derivation',{}).get('recipe')!=manifest['derivation_runtime']['recipe']):
+            raise ValueError('Bound original request/context/recipe required')
+        if context['derivation'].get('crop_admission',{}).get('eligible') is True:
+            if request['request_id'] in eligible:raise ValueError('Duplicate original source request')
+            eligible[request['request_id']]=request
+    results=manifest['request_results']
+    if (len(eligible)!=46 or not isinstance(results,list) or len(results)!=46
+      or [r.get('request_id') for r in results]!=list(eligible)):
+        raise ValueError('All46 eligible reads required in immutable source order; held14 stay unread')
+    for record in results:
+        if set(record)!={'request_id','observations','summary','closed_source','crop_proof','raw'}:
+            raise ValueError('Source-only observation/raw/closure pins required')
+        raw=record['raw']
+        if set(raw)!={'detector','recognizers','tesseract_tsv'} or not isinstance(raw['recognizers'],list):
+            raise ValueError('Actual detector/recognizer/TSV source pins required')
+    return manifest,eligible,config
+
+
+def load_fresh_source_reads(spec,check=checked):
+    """Read already-finished source observations; never runs OCR or changes cache."""
+    manifest,requests,config=fresh_source_metadata(spec,check);closed_cache={};records=[]
+    def path_equal(a,b):return str(PureWindowsPath(a)).casefold()==str(PureWindowsPath(b)).casefold()
+    def same_directory(record,folder,name):
+        if not path_equal(record['path'],str(folder/name)):raise ValueError('Fresh artifact is outside its actual native output')
+    for record in manifest['request_results']:
+        request=requests[record['request_id']];summary=read(check(record['summary']))
+        if (summary.get('status')!='COMPLETE' or summary.get('executed') is not True or summary.get('failure') is not None
+          or summary.get('component')!='whole-cell-source' or summary.get('request_id')!=request['request_id']
+          or summary.get('requests_completed')!=1 or summary.get('requests_selected')!=1
+          or not same(summary.get('worker'),manifest['native_worker']) or not same(summary.get('config'),manifest['configuration'])
+          or not same(summary.get('plan'),manifest['plan']) or summary.get('derivation_runtime')!=manifest['derivation_runtime']
+          or summary.get('assistant_image_reads')!=0 or summary.get('optimizer_updates')!=0
+          or summary.get('baseline_cache_modified') is not False or summary.get('canonical_values_modified') is not False
+          or summary.get('production_activation') is not False):raise ValueError('Actual successful source-only native worker required')
+        for key in ('models','sdk_sources','tesseract','resource_policy','limits'):
+            if summary.get(key)!=config.get(key):raise ValueError('Fresh native configuration/model identity differs')
+        key=(record['closed_source']['path'],record['closed_source']['sha256'])
+        if key not in closed_cache:
+            closed=read(check(record['closed_source']))
+            if (closed.get('status')!='COMPLETE' or closed.get('failure') is not None
+              or closed.get('shared_lock_released_after_owned_closure') is not True
+              or closed.get('cleanup',{}).get('confirmed_all_known_owned_exited') is not True):
+                raise ValueError('Fresh source job physical closure required')
+            serial=read(check(closed['config']))
+            if serial.get('source',{}).get('sha256')!='87714bc07ea839a73115531e9358b2de0c17882a03d627a8353745fedf3c39d3' or serial.get('resource_policy')!=RESOURCES:
+                raise ValueError('Original07b/620/877 fresh-source supervision required')
+            closed_cache[key]=closed
+        closed=closed_cache[key]
+        matches=[r for r in closed['resources'] if same(r.get('worker_summary'),record['summary'])]
+        if len(matches)!=1:raise ValueError('Unique actually-closed native source child required')
+        resource=matches[0];resource_closed(resource)
+        if resource.get('child_started') is not True or resource.get('worker_optimizer_updates_permission') is not False:
+            raise ValueError('Actual owned inference-only fresh source child required')
+        folder=PureWindowsPath(record['summary']['path']).parent
+        argv=resource.get('actual_argv') or []
+        def argument(flag):
+            if argv.count(flag)!=1 or argv.index(flag)+1>=len(argv):raise ValueError('Fresh source actual argv differs')
+            return argv[argv.index(flag)+1]
+        if (not any(path_equal(x,manifest['native_worker']['path']) for x in argv) or '--execute' not in argv
+          or argument('--request-id')!=request['request_id'] or not path_equal(argument('--output'),str(folder))
+          or not path_equal(argument('--config'),manifest['configuration']['path'])
+          or argument('--config-sha256')!=manifest['configuration']['sha256']):raise ValueError('Fresh actual child source/request/output differs')
+        same_directory(record['observations'],folder,'OBSERVATIONS.json')
+        observed=read(check(record['observations']));crop=observed.get('crop')
+        if (observed.get('request_id')!=request['request_id'] or observed.get('page_number')!=request['page_number']
+          or observed.get('row_index')!=request['row_index'] or observed.get('field')!=request['field']
+          or observed.get('source_image')!=request['source_image'] or observed.get('geometry')!=request['geometry']
+          or observed.get('literal_source_only') is not True or observed.get('logical_field_values_assigned') is not False
+          or observed.get('baseline_cache_modified') is not False or observed.get('extra_independent_engine_families')!=0):
+            raise ValueError('Fresh observations must retain original request/source identity')
+        same_directory(record['crop_proof'],folder,'CROP_PROOF.json')
+        crop_proof=read(check(record['crop_proof']));physical=crop_proof.get('physical_crop')
+        if (crop_proof.get('request')!=request or crop_proof.get('crop')!=crop
+          or not isinstance(physical,dict) or set(physical)!={'path','sha256'}
+          or not re.fullmatch('[0-9a-f]{64}',str(physical.get('sha256')))):
+            raise ValueError('Actual whole physical crop proof/request differs')
+        same_directory(physical,folder,'whole_ROI.png')
+        raw=record['raw'];same_directory(raw['detector'],folder,'PADDLE_DETECTOR_RAW.json')
+        same_directory(raw['tesseract_tsv'],folder,'TESSERACT_RAW.tsv')
+        if [r.get('detection_index') for r in raw['recognizers']]!=list(range(summary['actual_detector_regions'])):
+            raise ValueError('Exact actual recognition-region source union required')
+        recognizers=[]
+        for item in raw['recognizers']:
+            if set(item)!={'detection_index','raw'}:raise ValueError('Indexed actual recognizer source required')
+            same_directory(item['raw'],folder,'PADDLE_REC_RAW_%03d.json'%item['detection_index'])
+            recognizers.append({'detection_index':item['detection_index'],'raw':read(check(item['raw']))})
+        records.append({'request':deepcopy(request),'observations':observed,'observations_pin':record['observations'],
+          'summary':summary,'summary_pin':record['summary'],'closed_source':record['closed_source'],'crop':crop,
+          'physical_crop':physical,'crop_proof':crop_proof,'crop_proof_pin':record['crop_proof'],
+          'raw_proof':{'detector':read(check(raw['detector'])),'recognizers':recognizers,
+            'tesseract_tsv':Path(check(raw['tesseract_tsv'])).read_text(encoding='utf-8-sig',errors='strict'),
+            'pins':{'detector':raw['detector'],'recognizers':[r['raw'] for r in raw['recognizers']],
+                    'tesseract_tsv':raw['tesseract_tsv']}},
+          'source_context':read(check(request['context_proof']))})
+    return {'contract':'document-ai-fresh-source-runtime.v1','manifest':spec['fresh_source_manifest'],'records':records,
+      'root_postclosure_raw_hash_seal':True,'worker_summary_seals_raw_hashes':False,'new_independent_engine_families':0,
+      'source_reads_executed_before_parser':len(records),'parser_OCR_calls':0,'baseline_cache_modified':False}
 
 def pilot_gate(spec_record,spec,score_record,closed_record,check=checked):
     score=read(check(score_record));closed=read(check(closed_record))
@@ -158,6 +303,41 @@ def pilot_gate(spec_record,spec,score_record,closed_record,check=checked):
               or run.get('reference_access') is not False):raise ValueError('Pilot parser completion/source binding differs')
     return score
 
+
+def fresh_tiny_gate(spec_record,spec,score_record,closed_record,check=checked):
+    """A real source-bound writer/scorer path before the38-page experiment."""
+    if not score_record or not closed_record:raise ValueError('Actual closed fresh-source tiny required before38-page pilot')
+    score=read(check(score_record));closed=read(check(closed_record))
+    safety=score.get('safety') or {}
+    if (score.get('status')!='COMPLETE' or score.get('scope')!='CORRECTION_SOURCE_TINY'
+      or not same(score.get('experiment'),spec_record) or not same(score.get('panel'),spec['panel'])
+      or not same(score.get('fresh_source_manifest'),spec.get('fresh_source_manifest'))
+      or score.get('processed_images')!=1 or score.get('actual_scorer_invocations')!=2
+      or score.get('writer_readback_verified') is not True or score.get('prior323_lost')!=0
+      or safety.get('exact_loss_count')!=0 or safety.get('new_wrong_count_all602')!=0
+      or safety.get('new_absence_falsefill_count')!=0):raise ValueError('Actual same-source zero-harm tiny parser/scorer/writer required')
+    if (closed.get('status')!='COMPLETE' or closed.get('failure') is not None
+      or closed.get('cleanup',{}).get('confirmed_all_known_owned_exited') is not True
+      or closed.get('shared_lock_released_after_owned_closure') is not True):raise ValueError('Tiny physical closure required')
+    resources=closed.get('resources',[])
+    if [r.get('stage') for r in resources]!=['control','candidate','paired_score']:raise ValueError('Three actual tiny parser/scorer children required')
+    config=read(check(closed['config']))
+    if (config.get('source',{}).get('sha256')!='87714bc07ea839a73115531e9358b2de0c17882a03d627a8353745fedf3c39d3'
+      or config.get('resource_policy')!=RESOURCES or [s.get('id') for s in config.get('steps',[])]!=['control','candidate','paired_score']
+      or any(s.get('worker',{}).get('sha256')!=spec['sources']['runner']['sha256'] or s.get('optimizer_updates_allowed') is not False for s in config['steps'])):
+        raise ValueError('Tiny must use actual new runner/original supervision')
+    for index,(resource,record) in enumerate(zip(resources,[score['control_complete'],score['candidate_complete'],score_record])):
+        resource_closed(resource)
+        if resource.get('child_started') is not True or resource.get('worker_optimizer_updates_permission') is not False or not same(resource.get('worker_summary'),record):
+            raise ValueError('Actual tiny child/source differs')
+        if index<2:
+            done=read(check(record));run=read(check(done['run_manifest']))
+            if (done.get('scope')!='tiny' or done.get('variant')!=('control','candidate')[index]
+              or done.get('pages')!=1 or not same(run.get('experiment'),spec_record)
+              or not same(run.get('fresh_source_manifest'),spec.get('fresh_source_manifest'))
+              or run.get('reference_access') is not False):raise ValueError('Tiny completion/source differs')
+    return score
+
 def nonempty(field):
     return isinstance(field,dict) and any(v is not None and (not isinstance(v,str) or bool(v.strip())) for v in (field.get('raw_value'),field.get('normalized_value')))
 
@@ -184,13 +364,16 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
     spec,profile,sources,panel,native,control=preflight(experiment_record)
     if variant not in ('control','candidate'):raise ValueError('Explicit parser arm required')
     if scope=='full484':pilot_gate(experiment_record,spec,pilot_score,pilot_closed)
-    numbers=selected_numbers(scope,panel);out=outdir(spec,output);began=time.monotonic()
+    if scope=='panel' and 'fresh_source_cells' in spec.get('active_components',[]):fresh_tiny_gate(experiment_record,spec,pilot_score,pilot_closed)
+    numbers=selected_numbers(scope,panel,spec.get('fresh_tiny_page'));out=outdir(spec,output);began=time.monotonic()
     shared=load('_correction_stream',checked(profile['pins']['shared']))
     bridge=guard=helpers=None
     if variant=='candidate':
         load_eligibility(spec)
         helpers=runtime(profile);bridge=load('correction_bridge',checked(spec['sources']['bridge']))
         helpers.update(load_components(spec));helpers['correction_bridge']=bridge
+        if 'fresh_source_cells' in spec.get('active_components',[]):
+            helpers['fresh_source_reads']=load_fresh_source_reads(spec)
         guard=load('correction_guard',checked(spec['sources']['guard']))
     cache={p['page_number']:p for p in read(checked(profile['pins']['cache']))['pages']}
     expected={x['page_number']:x for x in control['source_inventory']};seen=set();inventory=[]
@@ -201,6 +384,10 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
       'active_components':deepcopy(spec.get('active_components',[])),
       'old_missing_only_policy_modified':False,'reference_access':False,'new_OCR_calls':0,'new_model_calls':0,'source_image_decodes':0,
       'pilot_score':pilot_score,'pilot_closed':pilot_closed}
+    if 'fresh_source_cells' in spec.get('active_components',[]):
+        run.update(fresh_source_manifest=spec['fresh_source_manifest'],
+          fresh_source_observations_were_read_before_parser=True,
+          additional_independent_engine_families=0,baseline_cache_modified=False)
     save(out/'run_manifest.json',run)
     with (out/'page_extractions.json').open('x',encoding='utf8') as stream:
         stream.write('{"pages":[');first=True
@@ -250,6 +437,10 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
     done={'status':'COMPLETE','scope':scope,'variant':variant,'pages':len(seen),'source_inventory':inventory,'revision_counts':counts,
       'prediction':pin(out/'page_extractions.json'),'run_manifest':pin(out/'run_manifest.json'),'elapsed_seconds':time.monotonic()-began,
       'reference_access':False,'new_OCR_calls':0,'new_model_calls':0,'source_image_decodes':0,'writer_readback_verified':True}
+    if 'fresh_source_cells' in spec.get('active_components',[]):
+        done.update(fresh_source_manifest=spec['fresh_source_manifest'],
+          fresh_source_observation_requests=46,additional_independent_engine_families=0,
+          baseline_cache_modified=False,source_reading_effect_separate_from_training=True)
     save(out/'COMPLETE.json',done);return pin(out/'COMPLETE.json')
 
 def compare_panel(reference,metrics,shared,scorer,prior,mapping,primary_names=None):
@@ -291,7 +482,7 @@ def compare_panel(reference,metrics,shared,scorer,prior,mapping,primary_names=No
     return result
 
 def score(experiment_record,scope,control_path,candidate_path,output):
-    spec,profile,sources,panel,native,baseline=preflight(experiment_record);numbers=selected_numbers(scope,panel)
+    spec,profile,sources,panel,native,baseline=preflight(experiment_record);numbers=selected_numbers(scope,panel,spec.get('fresh_tiny_page'))
     from eval_assets import preflight as metric_preflight
     metric_preflight(profile)
     shared=load('_correction_score_shared',checked(profile['pins']['shared']));scorer=load('_correction_frozen_scorer',checked(profile['pins']['scorer']))
@@ -302,9 +493,10 @@ def score(experiment_record,scope,control_path,candidate_path,output):
         if (item.get('status')!='COMPLETE' or item.get('scope')!=scope or item.get('variant')!=name
           or not same(run.get('experiment'),experiment_record) or run.get('reference_access') is not False):raise ValueError('Actual matched correction parser completions required')
         if scope=='full484':pilot_gate(experiment_record,spec,run['pilot_score'],run['pilot_closed'])
+        if scope=='panel' and 'fresh_source_cells' in spec.get('active_components',[]):fresh_tiny_gate(experiment_record,spec,run['pilot_score'],run['pilot_closed'])
     reference=read(checked(profile['pins']['reference']));full_reference=reference;mapping=read(checked(profile['pins']['mapping']));prior=read(checked(profile['pins']['prior323']))
     groups.validate_mapping(mapping,sources)
-    if scope=='panel':reference={**reference,'pages':[p for p in reference['pages'] if p['page_number'] in numbers]}
+    if scope in ('panel','tiny'):reference={**reference,'pages':[p for p in reference['pages'] if p['page_number'] in numbers]}
     out=outdir(spec,output);metrics=[]
     for name,item in zip(('control','candidate'),done):
         pages=[];seen=set()
@@ -320,11 +512,15 @@ def score(experiment_record,scope,control_path,candidate_path,output):
         metrics.append(metric)
         if scope=='full484':save(out/(name+'_company_metrics.json'),shared.make_groups(groups,scorer,reference,prediction,metric,mapping))
     result=frozen.compare_outcomes(reference,metrics,shared,scorer,prior,mapping) if scope=='full484' else compare_panel(reference,metrics,shared,scorer,prior,mapping,{p['company_key'] for p in full_reference['pages']})
-    result.update(status='COMPLETE',scope='CORRECTION_FULL484_FIXED585' if scope=='full484' else 'CORRECTION_PILOT_PANEL',
+    result.update(status='COMPLETE',scope='CORRECTION_FULL484_FIXED585' if scope=='full484' else 'CORRECTION_SOURCE_TINY' if scope=='tiny' else 'CORRECTION_PILOT_PANEL',
       experiment=experiment_record,panel=spec['panel'],profile=spec['profile'],control_complete=pin(Path(control_path)/'COMPLETE.json'),
       candidate_complete=pin(Path(candidate_path)/'COMPLETE.json'),control_metrics=pin(out/'control_metrics.json'),candidate_metrics=pin(out/'candidate_metrics.json'),
       actual_scorer_invocations=2,writer_readback_verified=True,revision_counts=done[1]['revision_counts'],processed_images=len(numbers),
       new_OCR_calls=0,new_model_calls=0,source_image_decodes=0)
+    if 'fresh_source_cells' in spec.get('active_components',[]):
+        result.update(fresh_source_manifest=spec['fresh_source_manifest'],fresh_source_observation_requests=46,
+          additional_independent_engine_families=0,baseline_cache_modified=False,
+          source_reading_effect_separate_from_training=True)
     result['coverage_summary']=frozen.coverage_summary(full_reference,len(numbers),metrics[0])
     result['coverage_summary'].update(parser_processed_images=len(numbers),previously_processed_native_geometry_images=484,
       selected_reference_product_fields=result['product_present_denominator'],selected_reference_all_present_fields=result['safety']['scope_present'],
@@ -337,7 +533,7 @@ def score(experiment_record,scope,control_path,candidate_path,output):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=('preflight','parse','score'))
     p.add_argument('--experiment',type=Path,required=True);p.add_argument('--experiment-sha256',required=True)
-    p.add_argument('--scope',choices=('panel','full484'));p.add_argument('--variant',choices=('control','candidate'))
+    p.add_argument('--scope',choices=('tiny','panel','full484'));p.add_argument('--variant',choices=('control','candidate'))
     p.add_argument('--output',type=Path);p.add_argument('--control',type=Path);p.add_argument('--candidate',type=Path)
     p.add_argument('--pilot-score',type=Path);p.add_argument('--pilot-score-sha256');p.add_argument('--pilot-closed',type=Path);p.add_argument('--pilot-closed-sha256')
     p.add_argument('--execute',action='store_true');p.add_argument('--admission',type=Path);p.add_argument('--admission-sha256');a=p.parse_args()

@@ -408,10 +408,12 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
     """Combine explicit source-cell proposals without changing native evidence."""
     native=_native_propose_and_apply(page,cache,observation,helpers,observation_pin)
     cells=helpers.get('cell_association')
-    if cells is None:
+    fresh=helpers.get('fresh_source_cells')
+    if cells is None and fresh is None:
         return native
     frozen=digest([page,cache,observation])
-    source=cells.propose(page,cache,observation,helpers,observation_pin)
+    source=cells.propose(page,cache,observation,helpers,observation_pin) if cells is not None else {}
+    reread=fresh.propose(page,cache,observation,helpers,observation_pin) if fresh is not None else {}
     if digest([page,cache,observation])!=frozen:
         raise ValueError('Source cell association mutated retained inputs')
     native_audit=native['document_ai_correction_association']
@@ -421,15 +423,19 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
         'reference_access':False,'assistant_image_reads':False,'human_approved':False,
         'truncated_decisions':0,'source_confidence_gates':[.95,.70],
         'nonempty_correction_enabled':True}
+    if fresh is not None:
+        audit['fresh_source_route']=deepcopy(reread)
+        audit['fresh_read_manifest']=deepcopy((helpers.get('fresh_source_reads') or {}).get('manifest'))
+        audit['fresh_reads_are_additional_observations_not_extra_independent_families']=True
     if 'document_admission' in native_audit:
         audit['document_admission']=deepcopy(native_audit['document_admission'])
     out=deepcopy(page);out['document_ai_correction_association']=audit
-    raw_proposals=native_audit.get('proposed',[])+source.get('proposed',[])
+    raw_proposals=native_audit.get('proposed',[])+source.get('proposed',[])+reread.get('proposed',[])
     audit['proposed']=deepcopy(raw_proposals[:LIMIT])
     audit['truncated_decisions']=max(0,len(raw_proposals)-LIMIT)
-    audit['rejected']=deepcopy((native_audit.get('rejected',[])+source.get('rejected',[]))[:LIMIT])
+    audit['rejected']=deepcopy((native_audit.get('rejected',[])+source.get('rejected',[])+reread.get('rejected',[]))[:LIMIT])
     groups={}
-    for change in native_audit.get('changes',[])+source.get('changes',[]):
+    for change in native_audit.get('changes',[])+source.get('changes',[])+reread.get('changes',[]):
         key=(change['row_index'],change['field']);groups.setdefault(key,[]).append(change)
     if len(groups)>LIMIT:
         audit['rejected'].append({'reason':'bounded_combined_change_inventory_required'})
