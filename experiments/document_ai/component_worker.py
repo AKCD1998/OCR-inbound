@@ -3,10 +3,32 @@ from __future__ import annotations
 import argparse
 from datetime import datetime,timezone
 import json
+import os
 from pathlib import Path
+import threading
 import time
 from component_common import (RESOURCES,read,sha,pin,save,checked,validate_task,
                               component_preflight,verify_admission,restore_box,rotate_box,valid_box,attach_tokens)
+
+def select_tasks(plan,start=0,count=None):
+    tasks=plan['tasks']
+    if type(start) is not int or start<0 or count is not None and (type(count) is not int or count<=0):raise ValueError('Invalid exact inventory slice')
+    if plan['mode']!='full' and (start or count is not None):raise ValueError('Only full484 inventory may be split into supervised shards')
+    chosen=tasks[start:None if count is None else start+count]
+    if not chosen or count is not None and len(chosen)!=count:raise ValueError('Slice outside frozen source inventory')
+    return chosen
+
+def paddle_engine_config():
+    # Actual PaddleX3.7 engine schema: loose cpu_threads/enable_mkldnn kwargs
+    # reach BasePredictor and are discarded. Bind the runner configuration.
+    return {'cpu_threads':1,'run_mode':'paddle'}
+
+def deadline(seconds,phase,progress):
+    if not 0<seconds<=1200:raise ValueError('Finite phase deadline required')
+    def stop():
+        progress(phase+'_DEADLINE')
+        os._exit(124)  # No optimizer; outer620 closes every owned descendant.
+    timer=threading.Timer(seconds,stop);timer.daemon=True;timer.start();return timer
 
 def materialization(registry,component,receipt_path,registry_path=None):
     receipt=read(receipt_path)
@@ -38,18 +60,33 @@ class PaddleLayout:
         progress('CV_IMPORT_STARTED')
         import cv2
         cv2.setNumThreads(1)
+        # Official inference-only switch. Default eager initialization walks
+        # every training repository even though only local static inference is used.
+        os.environ['PADDLE_PDX_EAGER_INIT']='0'
+        os.environ['PADDLE_PDX_CPU_NUM_THREADS']='1'
         progress('PADDLE_SDK_IMPORT_STARTED')
-        from paddlex import create_model
-        progress('PADDLE_SDK_IMPORT_COMPLETED')
-        progress('MODEL_CONSTRUCTION_STARTED')
-        # Same direct static SDK entry point already used by the audited
-        # SLANet canary; avoid importing unrelated PaddleOCR wrapper pipelines.
-        self.model=create_model(model_name='PP-DocLayout-L' if key=='pp-layout-l' else 'PP-DocLayout-M',model_dir=str(root/key),
-            device='cpu',engine='paddle_static',cpu_threads=1,enable_mkldnn=False,enable_hpi=False)
+        import faulthandler
+        faulthandler.cancel_dump_traceback_later();faulthandler.dump_traceback_later(60,repeat=True)
+        try:
+            from paddlex.inference.models import create_predictor
+            from paddlex.utils.flags import EAGER_INITIALIZATION
+            if EAGER_INITIALIZATION is not False:raise ValueError('Unneeded training repository initialization enabled')
+            progress('PADDLE_SDK_IMPORT_COMPLETED')
+            progress('MODEL_CONSTRUCTION_STARTED')
+            # Same direct static SDK entry point already used by the audited
+            # SLANet canary; avoid importing unrelated PaddleOCR wrapper pipelines.
+            self.model=create_predictor(model_name='PP-DocLayout-L' if key=='pp-layout-l' else 'PP-DocLayout-M',model_dir=str(root/key),
+                device='cpu',engine='paddle_static',engine_config=paddle_engine_config())
+            actual=self.model.runner._config
+            if actual.get('cpu_threads')!=1 or actual.get('run_mode')!='paddle' or actual.get('device_type')!='cpu':raise ValueError('Actual native runner CPU/engine configuration differs')
+            self.runner_settings={k:actual[k] for k in ('cpu_threads','run_mode','device_type')}
+            self.runner_settings['eager_training_repository_initialization']=EAGER_INITIALIZATION
+        finally:
+            faulthandler.cancel_dump_traceback_later()
         progress('MODEL_CONSTRUCTION_COMPLETED')
     def predict(self,image,tokens):
         import numpy as np
-        result=list(self.model.predict(input=np.asarray(image)[:,:,::-1].copy(),batch_size=1))
+        result=list(self.model(input=np.asarray(image)[:,:,::-1].copy(),batch_size=1))
         if len(result)!=1:raise ValueError('One page must yield one layout result')
         raw=plain(payload(result[0].json));regions=[]
         for i,item in enumerate(raw.get('boxes',[])):
@@ -123,14 +160,18 @@ def execute(args,plan,registry,proof):
     model_root=Path(proof['model_root']);output=args.output.resolve();output.mkdir(parents=True,exist_ok=False)
     save(output/'STARTED.json',{'contract':'document-ai-component-trial.v1','utc':datetime.now(timezone.utc).isoformat(),'plan':pin(args.plan),'worker':pin(__file__),'registry':pin(args.registry),'component':component,'actual_model_predict_calls_started':0})
     import faulthandler
-    faulthandler.dump_traceback_later(30,repeat=True)
+    faulthandler.dump_traceback_later(60,repeat=False)
     began=time.monotonic()
     def progress(phase):save(output/(phase+'.json'),{'phase':phase,'elapsed_seconds':time.monotonic()-began,'utc':datetime.now(timezone.utc).isoformat()})
-    worker=PaddleLayout(model_root,component,progress) if component in ('pp-layout','pp-layout-l') else DoclingLayoutTables(model_root,progress)
+    startup=deadline(args.startup_seconds,'INITIALIZATION',progress)
+    try:worker=PaddleLayout(model_root,component,progress) if component in ('pp-layout','pp-layout-l') else DoclingLayoutTables(model_root,progress)
+    finally:startup.cancel()
+    initialization_seconds=time.monotonic()-began
+    if hasattr(worker,'runner_settings'):save(output/'ACTUAL_RUNNER_CONFIG.json',worker.runner_settings)
     completed=[];calls=0;layout_calls=0;table_calls=0
     try:
         from PIL import Image
-        for task in plan['tasks']:
+        for task in select_tasks(plan,args.slice_start,args.slice_count):
             validate_task(task);source=checked(task['source_image']);angle=task.get('rotation_ccw',0)
             with Image.open(source) as im:
                 if list(im.size)!=task['source_size']:raise ValueError('Raw source raster differs from pinned frame')
@@ -142,8 +183,9 @@ def execute(args,plan,registry,proof):
             calls+=1
             save(output/('PREDICT_STARTED_'+str(task['page'])+'.json'),{'page':task['page'],'predict_call_index':calls,'source_image':task['source_image']})
             rotated_tokens=[{**t,'bbox':rotate_box(t['bbox'],task['source_size'],angle)} for t in task.get('tokens',[])]
+            prediction=deadline(args.predict_seconds,'PREDICT_'+str(task['page']),progress)
             try:result=worker.predict(image,rotated_tokens)
-            finally:image.close()
+            finally:prediction.cancel();image.close()
             layout_calls+=result['layout_model_calls'];table_calls+=result['table_model_calls']
             regions=[];rejected=[]
             for item in result['regions']:
@@ -166,13 +208,18 @@ def execute(args,plan,registry,proof):
     summary={'contract':'document-ai-component-trial.v1','status':'COMPLETE','component':component,'plan':pin(args.plan),'registry':pin(args.registry),'materialization':pin(args.materialization),
              'pages_completed':len(completed),'actual_model_predict_calls_started':calls,'page_results':completed,'elapsed_seconds':time.monotonic()-began,
              'actual_completed_layout_model_calls':layout_calls,'actual_completed_table_model_calls':table_calls,
+             'initialization_seconds':initialization_seconds,'startup_deadline_seconds':args.startup_seconds,'per_page_prediction_deadline_seconds':args.predict_seconds,
+             'full_source_inventory_pages':len(plan['tasks']),'selected_pages':[t['page'] for t in select_tasks(plan,args.slice_start,args.slice_count)],
+             'complete_full_inventory':len(completed)==len(plan['tasks']),
              'new_text_OCR_calls':0,'optimizer_updates':0,'endpoint_score_status':'NOT_EVALUATED','endpoint_gain':None,'known_development_set':True,'production_activation':False}
     save(output/'SUMMARY.json',summary);return summary
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--registry',type=Path,required=True);ap.add_argument('--plan',type=Path,required=True);ap.add_argument('--plan-sha256',required=True);ap.add_argument('--materialization',type=Path)
-    ap.add_argument('--output',type=Path,required=True);ap.add_argument('--execute',action='store_true');ap.add_argument('--admission',type=Path);ap.add_argument('--admission-sha256');a=ap.parse_args()
+    ap.add_argument('--output',type=Path,required=True);ap.add_argument('--execute',action='store_true');ap.add_argument('--admission',type=Path);ap.add_argument('--admission-sha256')
+    ap.add_argument('--startup-seconds',type=int,default=480);ap.add_argument('--predict-seconds',type=int,default=120)
+    ap.add_argument('--slice-start',type=int,default=0);ap.add_argument('--slice-count',type=int);a=ap.parse_args()
     if sha(a.plan)!=a.plan_sha256:raise ValueError('Plan SHA differs')
     plan=read(a.plan);registry=read(a.registry)
     if plan.get('contract')!='root-document-ai-source-only-trial-plan.v1' or plan.get('approved_by')!='root' or plan.get('resource_policy')!=RESOURCES:raise ValueError('Root bounded source-only plan required')
@@ -182,6 +229,8 @@ def main():
     if not 0<len(tasks)<=limit or len({t['page'] for t in tasks})!=len(tasks):raise ValueError('Stage/page bound differs')
     if plan['mode']=='full' and len(tasks)!=484:raise ValueError('Full stage must account all484 sources')
     for task in tasks:validate_task(task)
+    select_tasks(plan,a.slice_start,a.slice_count)
+    if not 0<a.startup_seconds<=1200 or not 0<a.predict_seconds<=1200:raise ValueError('Finite separate startup/prediction budgets required')
     pre=component_preflight(registry,plan['component'])
     if not a.execute:
         print(json.dumps({'valid':True,'executed':False,'tasks':len(tasks),'preflight':pre,'model_calls':0}));return

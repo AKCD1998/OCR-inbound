@@ -4,7 +4,7 @@ No credentials, privilege changes, old-task restart, or recursive copying.
 The selected worker is responsible for model admission and shared resource locking.
 """
 from __future__ import annotations
-import argparse,hashlib,json,subprocess
+import argparse,hashlib,json,re,subprocess
 from datetime import datetime,timezone
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -17,8 +17,13 @@ IDENTITY_TASK='OCR_484_HQ_ONE_EPOCH_EXEC_ROOT_V2'
 NS='http://schemas.microsoft.com/windows/2004/02/mit/task'
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 def psquote(s):return "'"+str(s).replace("'","''")+"'"
-def publish(source,args,name,*,extra_files=(),max_minutes=30):
+def publish(source,args,name,*,extra_files=(),max_minutes=30,powershell_parameters=None):
     if not name.startswith('OCR_DOCAI_') or not name.replace('_','').isalnum():raise ValueError('New isolated task name required')
+    if Path(source).name=='serial_supervisor.py' and '--execute' not in args:
+        raise ValueError('Published serial jobs must explicitly execute; perform validation without publishing a task')
+    if powershell_parameters is not None:
+        if Path(source).suffix.lower()!='.ps1' or args or not isinstance(powershell_parameters,dict):raise ValueError('Explicit PowerShell source and named parameters required')
+        if any(not isinstance(k,str) or not re.fullmatch('[A-Za-z][A-Za-z0-9_]*',k) or not isinstance(v,str) for k,v in powershell_parameters.items()):raise ValueError('Simple PowerShell parameter names/string values required')
     exists=subprocess.run(['schtasks','/Query','/S',HQ,'/TN',name],capture_output=True)
     if exists.returncode==0:raise FileExistsError('Task already exists; inspect it instead of restarting')
     output=subprocess.check_output(['schtasks','/Query','/S',HQ,'/TN',IDENTITY_TASK,'/XML'])
@@ -38,7 +43,11 @@ def publish(source,args,name,*,extra_files=(),max_minutes=30):
         pins.append({'file':f.name,'sha256':sha(f),'bytes':f.stat().st_size})
     native=NATIVE+'\\'+name
     native_source=native+'\\'+Path(source).name
-    command='& '+psquote(PYTHON)+' -X utf8 -B '+psquote(native_source)+' '+ ' '.join(psquote(x) for x in args)
+    if powershell_parameters is None:
+        command='& '+psquote(PYTHON)+' -X utf8 -B '+psquote(native_source)+' '+ ' '.join(psquote(x) for x in args)
+    else:
+        parameters='@{'+ ';'.join(k+'='+psquote(v) for k,v in powershell_parameters.items())+'}'
+        command='$global:LASTEXITCODE=0\n$workerParameters='+parameters+'\n& '+psquote(native_source)+' @workerParameters'
     log=native+'\\task.log'
     script="$ErrorActionPreference='Stop'\n"+'\n'.join("$env:"+key+"='1'" for key in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS','PYTHONDONTWRITEBYTECODE'))+'\n'+command+' >> '+psquote(log)+' 2>&1\nif($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n'
     script_path=target/'run.ps1';script_path.write_text(script,encoding='utf-8-sig')
@@ -50,6 +59,7 @@ def publish(source,args,name,*,extra_files=(),max_minutes=30):
     action.find(tag('WorkingDirectory')).text=native
     xml=target/'task.xml';ET.ElementTree(task).write(xml,encoding='utf-16',xml_declaration=True)
     receipt={'contract':'document-ai-isolated-HQ-publication.v1','created_at_utc':datetime.now(timezone.utc).isoformat(),'task':name,'source_files':pins,'task_script_sha256':sha(script_path),'args':args,'new_privileges_or_credentials':False,'identity_inherited_from_existing_task':IDENTITY_TASK,'model_resource_admission_delegated_to_selected_worker':True}
+    if powershell_parameters is not None:receipt.update(execution_mode='powershell_only_until_frozen_predecessor_ready',powershell_parameters=powershell_parameters)
     (target/'PUBLICATION.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2),encoding='utf-8')
     subprocess.run(['schtasks','/Create','/S',HQ,'/TN',name,'/XML',str(xml)],check=True,capture_output=True)
     subprocess.run(['schtasks','/Run','/S',HQ,'/TN',name],check=True,capture_output=True)

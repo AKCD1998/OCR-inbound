@@ -132,10 +132,11 @@ def main():
     if not a.execute:print({'valid':True,'executed':False,'steps':len(c['steps']),'model_calls':0});return
     require_HQ();import psutil
     ownership=load('_docai_original620_ownership',c['pins']['ownership']['path']);probe=load('_docai_fresh_metadata',c['pins']['metadata_probe']['path'])
-    output.mkdir(parents=True,exist_ok=False);registry=ownership.OwnedRegistry(psutil);resources=[];failure=None;closure=None
+    output.mkdir(parents=True,exist_ok=False);registry=ownership.OwnedRegistry(psutil);resources=[];failure=None;closure=None;lock_acquired=False
     save(output/'STARTED.json',{'config':pin(a.config),'supervisor':pin(__file__),'started_utc':datetime.now(timezone.utc).isoformat(),'workers_started':0})
     try:
         with ownership.safe_owned_lock(ownership.LOCK,registry):
+            lock_acquired=True
             fresh=probe.probe(c['pins']['controller']['path'],ownership.LOCK)
             closure=ordinary_process_gate(fresh,c);save(output/'EXTERNAL_PROCESS_CLOSURE.json',{'fresh_metadata':fresh,'source_verified_ordinary_processes':closure})
             end=time.monotonic()+c['maximum_total_seconds']
@@ -154,7 +155,8 @@ def main():
             if failed_resource.is_file() and not any(r['stage']==step['id'] for r in resources):resources.append(read(failed_resource))
     cleanup=registry.last_cleanup or registry.cleanup();safe=cleanup['confirmed_all_known_owned_exited'] is True
     save(output/'RESULT.json',{'contract':'document-ai-HQ-serial-result.v1','status':'COMPLETE' if failure is None and safe else 'FAILED',
-        'failure':failure,'config':pin(a.config),'resources':resources,'cleanup':cleanup,'shared_lock_released_after_owned_closure':safe,
+        'failure':failure,'config':pin(a.config),'resources':resources,'cleanup':cleanup,'shared_lock_acquired':lock_acquired,
+        'shared_lock_released_after_owned_closure':safe and lock_acquired,
         'production_activation':False,'optimizer_updates_measurement':'worker summaries only'})
     if failure or not safe:raise SystemExit(1)
 

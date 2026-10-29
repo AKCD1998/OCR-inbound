@@ -1,0 +1,61 @@
+{
+  "contract": "document-ai-isolated-cpu-environment.v1",
+  "profile": "prospective-Torch2.6CPU-after-actual-Torch2.8-extraction-failure",
+  "python_abi": "cp311-win_amd64",
+  "primary_requirements": [
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.6.0%2Bcpu-cp311-cp311-win_amd64.whl#sha256=24c9d3d13b9ea769dd7bd5c11cfa1fc463fd7391397156565484565ca685d908",
+    "torchvision @ https://download-r2.pytorch.org/whl/cpu/torchvision-0.21.0%2Bcpu-cp311-cp311-win_amd64.whl#sha256=852b96738a68592223f01a04e4bcc1b3906bef7eee41c99f27f3be5706046862",
+    "transformers==5.21.0",
+    "docling-ibm-models==4.0.4",
+    "numpy==2.2.6",
+    "Pillow==12.3.0",
+    "opencv-python-headless==4.12.0.88",
+    "psutil==7.2.2",
+    "setuptools==65.5.0"
+  ],
+  "bootstrap_pip": {
+    "filename": "pip-24.0-py3-none-any.whl",
+    "version": "24.0",
+    "bytes": 2110226,
+    "sha256": "ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc",
+    "publisher_url": "https://files.pythonhosted.org/packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl",
+    "source": "existing read-only Python ensurepip bundle, verified against publisher"
+  },
+  "allowed_artifact_hosts": [
+    "files.pythonhosted.org",
+    "download.pytorch.org",
+    "download-r2.pytorch.org"
+  ],
+  "maximum_resolved_download_bytes": 2147483648,
+  "minimum_free_disk_bytes_before_setup": 6442450944,
+  "publisher_CPU_wheel_bytes": {
+    "torch": 206540444,
+    "torchvision": 1555045
+  },
+  "publisher_Torch_zip_metadata": {
+    "uncompressed_bytes": 1159263614,
+    "files": 10901,
+    "dnnl_static_library_bytes": 653534016,
+    "metadata_range_bytes_read": 1097126
+  },
+  "sources": [
+    "https://download.pytorch.org/whl/cpu/torch/",
+    "https://download.pytorch.org/whl/cpu/torchvision/",
+    "https://pypi.org/pypi/docling-ibm-models/4.0.4/json",
+    "https://pypi.org/pypi/transformers/5.21.0/json"
+  ],
+  "runtime_version_change_not_timing_only": true,
+  "requires_actual_NumPy_Torch_ABI_and_Docling_forward": true,
+  "model_downloads": 0,
+  "model_imports": 0,
+  "mutates_frozen_runtime": false,
+  "publisher_auxiliary_packages": {
+    "setuptools": {
+      "version": "65.5.0",
+      "filename": "setuptools-65.5.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/41/82/7f54bbfe5c247a8c9f78d8d1d7c051847bcb78843c397b866dba335c1e88/setuptools-65.5.0-py3-none-any.whl",
+      "sha256": "f62ea9da9ed6289bfe868cd6845968a2c854d1427f8548d52cae02a42b4f0356",
+      "bytes": 1232695
+    }
+  }
+}
