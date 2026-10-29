@@ -29,6 +29,7 @@ def build(profile_path,native_path,scope,name,tiny_path=None,supervision_paths=(
     workers=[r for r in profile['bridge_sources'] if str(r['path']).replace('\\','/').rsplit('/',1)[-1]=='eval_runner.py']
     if len(workers)!=1:raise ValueError('Exactly one pinned deployed endpoint worker required')
     worker=workers[0];transport.checked(worker);profile_pin=transport.pin(profile_path)
+    lifecycle_pins=[profile['lifecycle_equivalence']] if profile.get('lifecycle_equivalence') else []
     common=['--profile',profile_pin['path'],'--profile-sha256',profile_pin['sha256'],
       '--scope',scope,'--execute','--admission','{admission}','--admission-sha256','{admission_sha256}']
     steps=[]
@@ -37,10 +38,10 @@ def build(profile_path,native_path,scope,name,tiny_path=None,supervision_paths=(
         args=['parse',*common,'--variant',variant,'--native-summary',native['path'],'--native-sha256',native['sha256'],'--output',str(out)]
         if tiny:args+=['--tiny-receipt',tiny['path'],'--tiny-sha256',tiny['sha256']]
         steps.append({'id':variant,'component':'endpoint-eval','worker':worker,'optimizer_updates_allowed':False,
-          'maximum_seconds':600,'input_pins':[profile_pin,native]+supervision+([tiny] if tiny else []),'args':args,
+          'maximum_seconds':600,'input_pins':[profile_pin,native]+supervision+lifecycle_pins+([tiny] if tiny else []),'args':args,
           'summary_path':str(out/'COMPLETE.json'),'summary_equals':{'status':'COMPLETE','scope':scope,'variant':variant}})
     steps.append({'id':'paired_score','component':'endpoint-eval','worker':worker,'optimizer_updates_allowed':False,
-      'maximum_seconds':600,'input_pins':[profile_pin,native]+supervision,
+      'maximum_seconds':600,'input_pins':[profile_pin,native]+supervision+lifecycle_pins,
       'args':['score',*common,'--control',str(root/'control'),'--candidate',str(root/'candidate'),'--output',str(root/'score')],
       'summary_path':str(root/'score/RESULT.json'),'summary_equals':{'status':'COMPLETE','actual_scorer_invocations':2}})
     return {'contract':'document-ai-actual-native-paired-evaluation-steps.v1','executed':False,'source_profile':profile_pin,

@@ -104,6 +104,30 @@ def accepted_worker_options(template, positive_summary):
     return options
 
 
+def lifecycle_tiny(config,positive_summary_pin,positive_summary,check=checked):
+    """A source family cannot reuse a tiny from the old operational arm."""
+    if config.get('lifecycle_equivalence') is None:return None
+    from eval_lifecycle import validate_approval,validate_producer,context
+    from eval_runner import tiny_gate
+    lifecycle=validate_approval(config['lifecycle_equivalence'],check)
+    if config['pins'].get('lifecycle_equivalence')!=config['lifecycle_equivalence']:
+        raise ValueError('Lifecycle approval must remain in every immutable stage pin set')
+    validate_producer(positive_summary,positive_summary_pin,lifecycle,'fresh')
+    profile_pin=config.get('endpoint_profile')
+    if not profile_pin or config['pins'].get('endpoint_profile')!=profile_pin:
+        raise ValueError('Selected V5 endpoint profile must remain in the immutable stage pin set')
+    selected_profile=read(check(profile_pin));context(selected_profile,check)
+    if selected_profile.get('lifecycle_equivalence')!=config['lifecycle_equivalence']:
+        raise ValueError('Full/tiny lifecycle profiles differ')
+    actual_tiny=read(check(config['actual_closed_endpoint_tiny']))
+    tiny_gate(selected_profile,actual_tiny['resources'][-1]['worker_summary'],check)
+    for item in actual_tiny['resources'][:2]:
+        complete=read(check(item['worker_summary']));manifest=read(check(complete['run_manifest']))
+        if manifest.get('profile')!=profile_pin or manifest.get('native_summary')!=positive_summary_pin:
+            raise ValueError('New V5 tiny must exercise the same actual positive900 source summary')
+    return lifecycle
+
+
 def retained_layout(entry, plan, parent_pin, registry_pin, expected, runtime_versions, materialization_pin):
     """Keep the original producer identity; never relabel retained calls as new."""
     from docling_stage_worker import actual_upstream
@@ -122,7 +146,7 @@ def retained_layout(entry, plan, parent_pin, registry_pin, expected, runtime_ver
     return summary,{'summary':summary_pin,'resource':resource_pin}
 
 
-def retained_table(entry, plan, parent_pin, expected, upstream, positive):
+def retained_table(entry, plan, parent_pin, expected, upstream, positive,lifecycle_equivalence=None):
     """Reuse a pristine closed table child without rewriting its failed parent."""
     summary_pin,resource_pin=entry['summary'],entry['resource']
     origin=read(checked(entry['closed_source_supervision']))
@@ -136,8 +160,18 @@ def retained_table(entry, plan, parent_pin, expected, upstream, positive):
       or resource.get('logs_finalized_after_owned_cleanup') is not True
       or not 0<resource.get('peak_owned_process_tree_RSS_bytes',0)<=RESOURCES['maximum_own_process_tree_RSS_bytes']
       or resource.get('minimum_free_RAM_bytes',0)<RESOURCES['stop_free_RAM_bytes']):raise ValueError('Retained table requires its pristine successful closed child')
+    if lifecycle_equivalence is not None:
+        from eval_lifecycle import Approval,validate_approval,validate_producer,recipe_identity
+        approval=lifecycle_equivalence if isinstance(lifecycle_equivalence,Approval) else validate_approval(lifecycle_equivalence)
+        allowed=approval.data['retained_table']
+        if (any(entry.get(k)!=allowed[k] for k in ('summary','resource','closed_source_supervision'))
+          or expected!=allowed['selected_pages'] or summary.get('worker')!=approval.data['original_worker']):
+            raise ValueError('Only the explicitly approved original64b1d retained table may cross lifecycle sources')
+        validate_producer(summary,summary_pin,approval)
+        validate_producer(positive,{},approval,'fresh');recipe_identity(positive,approval)
+    elif summary.get('worker',{}).get('sha256')!=positive['worker']['sha256']:
+        raise ValueError('Retained table producer differs without explicit lifecycle authority')
     if (any(summary.get(k)!=positive.get(k) for k in ('registry','materialization','runtime_versions','native_table_options'))
-      or summary.get('worker',{}).get('sha256')!=positive['worker']['sha256']
       or not upstream or summary.get('upstream_layout_summary')!=upstream['summary']):raise ValueError('Retained table model/source/options or selected layout differs')
     checked(summary['worker']);completed_pages(summary,parent_pin,expected,'tables')
     abi=read(checked(summary['actual_runtime_ABI_proof']));cpu=read(checked(summary['actual_native_CPU_binding']))
@@ -248,6 +282,7 @@ def main():
         raise ValueError('Positive TableFormer summary is not bound to its real closed child')
     positive_summary = read(checked(positive_summary_pin))
     positive_table_canary(positive_summary, positive_result, config['actual_positive_table_page'])
+    lifecycle=lifecycle_tiny(config,positive_summary_pin,positive_summary)
     supervisor_path = checked(config['source'])
     spec = importlib.util.spec_from_file_location('_frozen_docling_full_serial', supervisor_path)
     supervisor = importlib.util.module_from_spec(spec)
@@ -305,7 +340,7 @@ def main():
                             origin,upstream=retained_layout(entry,full,config['full_parent_plan'],positive_summary['registry'],expected,positive_summary['runtime_versions'],positive_summary['materialization'])
                             retained_pages.extend(expected)
                         else:
-                            origin=retained_table(entry,full,config['full_parent_plan'],expected,upstream,positive_summary)
+                            origin=retained_table(entry,full,config['full_parent_plan'],expected,upstream,positive_summary,lifecycle)
                             retained_tables.extend(expected)
                         completed.extend(expected)
                         save(output/(stage+'_'+str(index).zfill(3)+'.RETAINED.json'),{
@@ -324,6 +359,8 @@ def main():
                     summary = read(checked(summary_pin))
                     if summary.get('worker', {}).get('sha256') != positive_summary['worker']['sha256'] or stage == 'tables' and summary.get('native_table_options') != positive_summary['native_table_options']:
                         raise ValueError('Actual full source/options changed from accepted canary')
+                    if lifecycle and summary.get('runtime_cache')!=lifecycle.data['delivery_provenance']['selected_runtime_cache']:
+                        raise ValueError('Fresh layout/table runtime cache differs from selected startup900 delivery')
                     completed.extend(completed_pages(summary, config['full_parent_plan'], expected, stage))
                     if stage=='layout':fresh_layouts.extend(expected)
                     else:fresh_tables.extend(expected)

@@ -55,7 +55,7 @@ def build(evidence_root,results_root,component,tiny_page=2,final164_source_root=
     for r in retained_sources:checked(r)
     for r in dependencies:checked(r)
     if [r['module_name'] for r in dependencies]!=['ocr_inbound.literal_uom_grammar','line_grid_refinement_v4','goods_table_router','slanet_structure_adapter','slanet_cell_projection_v2']:raise ValueError('Pure helper order changed')
-    files=[pin(Path(__file__).with_name(name)) for name in ['eval_assets.py','eval_geometry.py','eval_runner.py','eval_plan.py','eval_merge.py','eval_native.py','eval_transport.py','component_common.py']]
+    files=[pin(Path(__file__).with_name(name)) for name in ['eval_assets.py','eval_geometry.py','eval_runner.py','eval_plan.py','eval_merge.py','eval_native.py','eval_transport.py','component_common.py','eval_lifecycle.py']]
     return {'contract':'document-ai-fixed323-evaluation-plan.v1','component':component,
       'selected_native_table_options':{'do_matching':False,'evaluation_predictions_supplied':False,'cpu_backend':'aten','mkldnn_enabled':False} if component=='docling' else None,
       'baseline':'retained FINAL164 + saved C4 canonical; never fresh324 or a new OCR read',
@@ -70,6 +70,10 @@ def preflight(profile,check=checked):
     if profile.get('component')=='docling':
         from eval_native import validate_table_options
         if validate_table_options(profile.get('selected_native_table_options'))['do_matching'] is not False:raise ValueError('Selected source-only Docling table options required')
+    if profile.get('lifecycle_equivalence') is not None:
+        from eval_lifecycle import context
+        if profile.get('component')!='docling' or profile.get('bridge_version')!='V5-startup900-family':raise ValueError('Lifecycle source equivalence requires explicit isolated V5 Docling profile')
+        context(profile,check)
     records=list(profile['pins'].values())+profile['parser_sources']+profile['final164_source_files']+profile['dependencies']+profile['bridge_sources']
     for r in records:check(r)
     for k,v in EXPECTED.items():

@@ -19,6 +19,8 @@ def output_path(profile,path):
 def native_records(summary_record,profile,scope,check=checked):
     from eval_native import runtime_proof,table_upstream,table_options,validate_table_options
     summary=read(check(summary_record))
+    from eval_lifecycle import context,validate_producer
+    approval=context(profile,check)
     if (summary.get('status')!='COMPLETE' or summary.get('contract')!='document-ai-component-trial.v1'
       or summary.get('component')!=profile['component'] or summary.get('new_text_OCR_calls')!=0
       or summary.get('optimizer_updates')!=0):raise ValueError('Actual completed geometry-only component required')
@@ -39,10 +41,13 @@ def native_records(summary_record,profile,scope,check=checked):
     if len(records)!=summary['pages_completed']:raise ValueError('Native completion count mismatch')
     if summary.get('native_shard_summaries'):
         from eval_merge import aggregate
-        actual=aggregate(summary['native_shard_summaries'],summary['actual_closed_supervision_receipts'],check=check)
+        if summary.get('lifecycle_equivalence')!=profile.get('lifecycle_equivalence'):raise ValueError('Native/profile lifecycle approval differs')
+        actual=aggregate(summary['native_shard_summaries'],summary['actual_closed_supervision_receipts'],check=check,
+                         lifecycle_equivalence=profile.get('lifecycle_equivalence'))
         if actual!=summary:raise ValueError('Aggregated native metadata differs from its actual shards')
     else:
         runtime_proof(summary,check);table_upstream(summary,observations,check)
+        if approval:validate_producer(summary,summary_record,approval,'fresh')
     required={profile['tiny_page']} if scope=='tiny' else set(range(1,485))
     if (not required<=set(records) or scope=='full484' and (set(records)!=required
       or summary.get('complete_full_inventory') is not True)):raise ValueError('Native coverage incomplete; not an all484 component measurement')
@@ -59,7 +64,14 @@ def tiny_gate(profile,receipt,check=checked,native_identity=None):
         from eval_native import model_identity
         done=read(check(result['control_complete']));run=read(check(done['run_manifest']))
         old=read(check(run['native_summary']))
-        if model_identity(old)!=native_identity:raise ValueError('Tiny/full native component/model/runtime identity differs')
+        if profile.get('lifecycle_equivalence') is not None:
+            from eval_lifecycle import context,validate_producer,recipe_identity
+            approval=context(profile,check);validate_producer(old,run['native_summary'],approval,'fresh')
+            recipe=recipe_identity(old,approval)
+            if (any(native_identity.get(k)!=v for k,v in recipe.items())
+              or native_identity.get('actual_worker_sha256s')!=sorted([approval.data['original_worker']['sha256'],approval.data['variant_worker']['sha256']])):
+                raise ValueError('Tiny/full lifecycle family or actual source identities differ')
+        elif model_identity(old)!=native_identity:raise ValueError('Tiny/full native component/model/runtime identity differs')
 
 def parse(profile,profile_record,native_record,variant,scope,out,tiny_receipt=None):
     preflight(profile)

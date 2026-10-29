@@ -107,10 +107,16 @@ def table_upstream(summary,observations,check=checked):
     return proofs
 
 def model_identity(summary):
-    return {'component':summary['component'],'stage':summary.get('stage','combined'),
+    result={'component':summary['component'],'stage':summary.get('stage','combined'),
       'registry_sha256':summary['registry']['sha256'],'model_data_sha256':summary['materialization']['sha256'],
-      'runtime_versions':summary.get('runtime_versions'),'native_table_options':table_options(summary),
-      'worker_sha256':worker_identity(summary)}
+      'runtime_versions':summary.get('runtime_versions'),'native_table_options':table_options(summary)}
+    if summary.get('native_shard_summaries') and 'actual_worker_sha256s' in summary:
+        workers=summary['actual_worker_sha256s']
+        if (not isinstance(workers,list) or not workers or workers!=sorted(set(workers))
+          or any(not isinstance(s,str) or not re.fullmatch('[0-9a-f]{64}',s) for s in workers)
+          or not re.fullmatch('[0-9a-f]{64}',summary.get('model_recipe_family_sha256',''))):raise ValueError('Actual mixed-source identity/approved recipe family required')
+        return {**result,'actual_worker_sha256s':workers,'model_recipe_family_sha256':summary['model_recipe_family_sha256']}
+    return {**result,'worker_sha256':worker_identity(summary)}
 
 def native_totals(summary,observations=None,check=checked):
     upstream={}

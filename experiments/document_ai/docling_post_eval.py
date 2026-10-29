@@ -38,6 +38,11 @@ def validate_config(c,driver,check=checked):
     for key in ('expected_profile_sha256','expected_table_worker_sha256'):
         if not isinstance(c.get(key),str) or not re.fullmatch('[0-9a-f]{64}',c[key]):raise ValueError('Root-frozen profile and accepted table worker identities required')
     if c['profile']['sha256']!=c['expected_profile_sha256']:raise ValueError('Selected root profile differs')
+    if c.get('lifecycle_equivalence') is not None:
+        from eval_lifecycle import validate_approval
+        approval=validate_approval(c['lifecycle_equivalence'],check)
+        if (c['expected_table_worker_sha256']!=approval.data['variant_worker']['sha256']
+          or c['pins'].get('lifecycle_equivalence')!=c['lifecycle_equivalence']):raise ValueError('Root postconfig must pin the exact fresh900 source and lifecycle approval')
     if type(c.get('maximum_total_seconds')) is not int or not 0<c['maximum_total_seconds']<=7200:raise ValueError('Post-evaluation total must be prospectively bounded <=7200s')
     if not c.get('native_task_name','').startswith('OCR_DOCAI_'):raise ValueError('Exact isolated native task identity required')
     return c
@@ -76,7 +81,14 @@ def retained_stage(c,entry,expected,stage,reference_summary,check=checked):
       or summary.get('new_text_OCR_calls')!=0 or summary.get('optimizer_updates')!=0
       or any(summary.get(k)!=reference_summary.get(k) for k in ('registry','materialization','runtime_versions'))):raise ValueError('Retained stage source/model/runtime differs')
     check(summary['worker']);runtime_proof(summary,check)
-    if stage=='tables' and model_identity(summary)!=model_identity(reference_summary):raise ValueError('Retained table worker/options/model differ from accepted source')
+    if stage=='tables' and c.get('lifecycle_equivalence') is not None:
+        from eval_lifecycle import validate_approval,validate_producer,recipe_identity
+        approval=validate_approval(c['lifecycle_equivalence'],check);allowed=approval.data['retained_table']
+        if (any(entry.get(k)!=allowed[k] for k in ('summary','resource','closed_source_supervision'))
+          or expected!=allowed['selected_pages'] or summary.get('worker')!=approval.data['original_worker']):raise ValueError('Unapproved retained table source/partition in lifecycle arm')
+        validate_producer(summary,summary_pin,approval);validate_producer(reference_summary,{},approval,'fresh')
+        if recipe_identity(summary,approval)!=recipe_identity(reference_summary,approval):raise ValueError('Retained recipe family differs')
+    elif stage=='tables' and model_identity(summary)!=model_identity(reference_summary):raise ValueError('Retained table worker/options/model differ from accepted source')
     plan=read(check(c['full_parent_plan']));tasks={t['page']:t for t in plan['tasks']}
     observed=[];observations={}
     for record in summary['page_results']:
@@ -126,6 +138,11 @@ def native_tables(c,result,config,check=checked):
       or config.get('full_parent_plan')!=c['full_parent_plan']
       or result.get('new_text_OCR_calls')!=0 or result.get('optimizer_updates')!=0):raise ValueError('Actual complete and safely closed fixed484 native result required')
     check(config['docling_full_driver'])
+    if config.get('lifecycle_equivalence')!=c.get('lifecycle_equivalence'):raise ValueError('Full/post lifecycle approvals differ')
+    lifecycle=None
+    if c.get('lifecycle_equivalence') is not None:
+        from eval_lifecycle import validate_approval
+        lifecycle=validate_approval(c['lifecycle_equivalence'],check)
     pages=list(range(1,485))
     if not exact_pages(result.get('actual_layout_pages'),pages) or not exact_pages(result.get('actual_table_stage_pages'),pages):raise ValueError('Actual native layout/table source union must equal integer1..484')
     size=config.get('shard_size')
@@ -152,6 +169,8 @@ def native_tables(c,result,config,check=checked):
           or summary.get('pages_completed')!=len(selections[index]) or summary.get('complete_stage_shard') is not True
           or summary.get('new_text_OCR_calls')!=0 or summary.get('optimizer_updates')!=0):raise ValueError('Actual native child/source partition differs')
         if summary.get('worker',{}).get('sha256')!=c['expected_table_worker_sha256']:raise ValueError('Fresh native worker differs from accepted source')
+        if lifecycle and summary.get('runtime_cache')!=lifecycle.data['delivery_provenance']['selected_runtime_cache']:
+            raise ValueError('Fresh layout/table cache differs from selected delivery')
         if stage=='tables':
             identity=model_identity(summary)
             if identity['worker_sha256']!=c['expected_table_worker_sha256'] or identity['native_table_options']!=OPTIONS:raise ValueError('Full table worker/options differ from accepted canary')
@@ -282,7 +301,8 @@ def main():
                 witness=composed_source_witness(c,native_pin,native,native_config,tables,guarded)
                 witness_path=preparation/'COMPOSED_CLOSED_SOURCE_WITNESS.json';save(witness_path,witness)
                 source_witnesses=[pin(witness_path)]
-            merged=aggregate(tables,source_witnesses,check=guarded)
+            if profile.get('lifecycle_equivalence')!=c.get('lifecycle_equivalence'):raise ValueError('Profile/post lifecycle approvals differ')
+            merged=aggregate(tables,source_witnesses,check=guarded,lifecycle_equivalence=c.get('lifecycle_equivalence'))
             tiny_gate(profile,c['tiny_score'],guarded,model_identity(merged))
             merged_path=preparation/'FULL_NATIVE_SUMMARY.json';save(merged_path,merged)
             plan=build(c['profile']['path'],str(merged_path),'full484',c['trial_name'],c['tiny_score']['path'])
