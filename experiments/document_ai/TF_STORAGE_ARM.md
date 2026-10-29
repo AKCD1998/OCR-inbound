@@ -42,8 +42,26 @@ summary predicate incorrectly expected no cache; a second prospectively correct
 run completed and closed successfully. No failed receipt was rewritten.
 
 The new implementation then passed an actual tiny control/candidate/evaluator/
-writer run. A uniform, fresh 484-image experiment is running as of this note;
-this document does not claim its final accuracy or adoption outcome.
+writer run. The uniform, fresh 484-image experiment completed on 29 October
+2026: all 16 native children closed successfully, with 484 layout model calls
+and 184 table model calls. Table-stage processing covers all 484 images,
+including images with no detected table. No old geometry was retained in this
+implementation arm. Native elapsed time was 2,377.235 seconds; peak owned
+process-tree RSS was 842,801,152 bytes under the unchanged 1 GiB cap.
+
+Both full parsers and the paired evaluator/writer then completed and closed.
+The frozen product-label score was **323/585 to 323/585 (55.21%)**. Fixes,
+prior-correct losses, new wrong values and new absence false fills were all zero.
+The evaluator ran twice and verified saved output by readback. There were no
+new text OCR calls, training samples, optimizer updates or training checkpoints.
+
+The candidate adapter made zero field changes. Its 484 page-level statuses
+were 325 `NO_USABLE_NATIVE_CELL_TOPOLOGY`, 34
+`NO_ESTABLISHED_INVOICE_SOURCE_FRAME`, and 125 `ABSTAINED`. These describe
+pipeline admission outcomes, not independently verified errors in every model
+table or every field on those pages. The memory repair makes this experiment
+finish safely; the current adapter has not demonstrated a downstream score
+gain. The component remains experimental and is not activated in production.
 
 ## Evaluation boundaries
 
