@@ -65,7 +65,7 @@ class SupervisorLockReceiptTests(unittest.TestCase):
             output=Path(directory)/'run'
             data={'pins':{'ownership':{'path':'ownership'},'metadata_probe':{'path':'probe'}}}
             argv=['supervisor','--config',str(config),'--config-sha256',supervisor.sha(config),'--execute']
-            with patch.object(sys,'argv',argv),patch.object(supervisor,'read',return_value=data),patch.object(supervisor,'validate',return_value=output),patch.object(supervisor,'require_HQ'),patch.object(supervisor,'load',side_effect=[ownership,SimpleNamespace()]):
+            with patch.dict(sys.modules,{'psutil':SimpleNamespace()}),patch.object(sys,'argv',argv),patch.object(supervisor,'read',return_value=data),patch.object(supervisor,'validate',return_value=output),patch.object(supervisor,'require_HQ'),patch.object(supervisor,'load',side_effect=[ownership,SimpleNamespace()]):
                 with self.assertRaises(SystemExit):supervisor.main()
             result=json.loads((output/'RESULT.json').read_text(encoding='utf-8'))
             self.assertEqual(result['status'],'FAILED')

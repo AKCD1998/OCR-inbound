@@ -476,7 +476,7 @@ class ComponentContracts(unittest.TestCase):
 
     def test_isolated_cache_preserves_source_and_quarantines_unregistered_pyc(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);cache=root/'cache';cache.mkdir();source=root/'needed.py';source.write_text('value=42\n')
+            root=Path(folder).resolve();cache=root/'cache';cache.mkdir();source=root/'needed.py';source.write_text('value=42\n')
             unused=root/'unused.py';unused.write_text('value=17\n');before=c.sha(source)
             with patch.object(sys,'pycache_prefix',str(cache)):
                 for path in (source,unused):
@@ -495,7 +495,7 @@ class ComponentContracts(unittest.TestCase):
 
     def test_cache_rejects_extra_bytecode_and_wrong_interpreter_identity(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
+            root=Path(folder).resolve();source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
             py_compile.compile(str(source),cfile=str(pyc),doraise=True)
             manifest={'contract':python_cache.CONTRACT,'status':'COMPLETE','python':c.pin(sys.executable),
                       'cache_tag':sys.implementation.cache_tag,'bytecode_magic':importlib.util.MAGIC_NUMBER.hex(),
@@ -509,7 +509,7 @@ class ComponentContracts(unittest.TestCase):
 
     def test_lazy_cache_hashes_actual_returned_bytes_and_source_even_for_valid_pyc(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
+            root=Path(folder).resolve();source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
             py_compile.compile(str(source),cfile=str(pyc),doraise=True)
             manifest={'contract':python_cache.CONTRACT,'status':'COMPLETE','python':c.pin(sys.executable),
                       'cache_tag':sys.implementation.cache_tag,'bytecode_magic':importlib.util.MAGIC_NUMBER.hex(),
@@ -530,7 +530,7 @@ class ComponentContracts(unittest.TestCase):
 
     def test_lazy_cache_rejects_inflight_pyc_tamper_and_unknown_existing_cache(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
+            root=Path(folder).resolve();source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
             py_compile.compile(str(source),cfile=str(pyc),doraise=True)
             manifest={'contract':python_cache.CONTRACT,'status':'COMPLETE','python':c.pin(sys.executable),
                       'cache_tag':sys.implementation.cache_tag,'bytecode_magic':importlib.util.MAGIC_NUMBER.hex(),
@@ -578,7 +578,7 @@ class ComponentContracts(unittest.TestCase):
 
     def test_lazy_guard_leaves_noncode_resources_byte_identical(self):
         with tempfile.TemporaryDirectory() as folder:
-            root=Path(folder);source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
+            root=Path(folder).resolve();source=root/'module.py';source.write_text('x=1\n');cache=root/'cache';cache.mkdir();pyc=cache/'module.pyc'
             py_compile.compile(str(source),cfile=str(pyc),doraise=True)
             data=root/'resource.json';data.write_bytes(b'{"unchanged":true}')
             manifest={'contract':python_cache.CONTRACT,'status':'COMPLETE','python':c.pin(sys.executable),
