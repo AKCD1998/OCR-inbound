@@ -253,6 +253,7 @@ class FreshManifestTests(unittest.TestCase):
                         runner.fresh_source_metadata(spec(mode+'.json',changed),check)
 
     def fixture(self,folder):
+        folder=folder.resolve()
         def put(file,value):
             common.save(folder/file,value);return common.pin(folder/file)
         plan=put('plan.json',{});worker=put('worker.json',{})
@@ -290,6 +291,18 @@ class FreshManifestTests(unittest.TestCase):
         manifest={'plan':plan,'native_worker':worker,'configuration':configuration,'derivation_runtime':derivation,'request_results':[record]}
         spec={'fresh_source_manifest':{'path':'sealed-source-manifest','sha256':'f'*64}}
         return put,request,summary,observations,closed,record,manifest,spec,config
+
+    def test_fixture_native_argv_and_pins_use_one_canonical_temporary_directory(self):
+        # Windows CI may supply an aliased TEMP path. Pins resolve it, so the
+        # invented native argv must describe the same canonical directory.
+        # A dotted spelling reproduces that mismatch without an OS dependency.
+        with tempfile.TemporaryDirectory() as name:
+            folder=Path(name)
+            values=self.fixture(folder/'temporary-alias'/'..')
+            _,request,_,_,closed,_,manifest,spec,config=values
+            self.assertEqual(str(folder.resolve()),closed['resources'][0]['actual_argv'][4])
+            with patch.object(runner,'fresh_source_metadata',lambda *args:(manifest,{'source-0':request},config)):
+                self.assertEqual(1,len(runner.load_fresh_source_reads(spec,common.checked)['records']))
 
     def test_actual_closed_native_artifacts_load_and_unclosed_or_unbound_outputs_refuse(self):
         with tempfile.TemporaryDirectory() as name:
