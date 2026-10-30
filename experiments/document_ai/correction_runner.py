@@ -28,7 +28,11 @@ LEGACY_CORRECTION_SOURCES={'bridge':'a0ba699ee400ff8c60828b5dc78c5aba35851aeedeb
  'guard':'96ec134180bdc7a0e35317abe2c0752c717cd116afdba8451e98944e6bd090a4'}
 COMPONENT_MODULES={'document_admission':'document_source_admission',
                    'cell_association':'source_cell_association',
-                   'fresh_source_cells':'fresh_source_cells'}
+                   'fresh_source_cells':'fresh_source_cells','glm_ocr':'glm_evidence'}
+GLM_DEPENDENCIES={'glm_loader':'glm_read_manifest'}
+GLM_PROVENANCE_LIMITATION=('Frozen provenance checks original baseline recognition_run only; '
+    'automated upstream GLM evidence is verified separately by pinned native closure/read receipts. '
+    'This is not a claim of zero VLM use across the combined pipeline.')
 FRESH_DEPENDENCIES={'fresh_source_protocol':'whole_cell_source',
                     'fresh_source_derivation':'whole_cell_source_derivation'}
 FRESH_FIXED={'plan':'ad0b3c7fd646875d1bc44a475d98e58c346c91e2e5eb428e8d86f8b53a2afa08',
@@ -64,13 +68,18 @@ def preflight(experiment_record,check=checked):
     required={'runner','bridge','guard','frozen_eval_runner'}
     active=spec.get('active_components',[])
     fresh=isinstance(active,list) and 'fresh_source_cells' in active
-    extra=set(FRESH_DEPENDENCIES) if fresh else set()
+    glm=isinstance(active,list) and 'glm_ocr' in active
+    extra=(set(FRESH_DEPENDENCIES) if fresh else set())|(set(GLM_DEPENDENCIES) if glm else set())
     if (not isinstance(active,list) or any(type(name) is not str for name in active) or len(set(active))!=len(active)
       or any(name not in COMPONENT_MODULES for name in active)
       or set(spec['sources']) not in (required|set(active)|extra,required|{'eligibility'}|set(active)|extra)
       or active and 'eligibility' not in spec['sources']):raise ValueError('Explicit bounded component/source closure required')
     if fresh and 'cell_association' not in active or fresh!=('fresh_source_manifest' in spec):
         raise ValueError('Fresh source arm requires original source-cell component and explicit read manifest')
+    if glm!=('glm_recipe' in spec):raise ValueError('GLM component requires static source recipe; reads are dynamic runtime pins')
+    quantity_only=spec.get('quantity_only_source_contexts',False)
+    if (type(quantity_only) is not bool or quantity_only and ('cell_association' not in active or fresh)):
+        raise ValueError('Quantity-only contexts require an explicit cached source-cell arm')
     if ('eligibility' in spec['sources'])!=('eligibility_policy' in spec):raise ValueError('Explicit eligibility policy/source binding required')
     if 'eligibility' in spec['sources'] and not same(spec['eligibility_policy'],spec['sources']['eligibility']):raise ValueError('Eligibility policy/source differs')
     if 'eligibility' not in spec['sources'] and any(spec['sources'][key]['sha256']!=value for key,value in LEGACY_CORRECTION_SOURCES.items()):
@@ -94,6 +103,20 @@ def preflight(experiment_record,check=checked):
     panel=read(check(spec['panel']))
     if not same(panel.get('source_inventory'),profile['pins']['sources']):raise ValueError('Panel source inventory differs')
     selected=panel_pages(panel,sources)
+    if glm:
+        loader=load_glm_loader(spec,check)
+        metadata=loader.recipe_metadata(spec['glm_recipe'],spec['sources']['glm_ocr'],check,spec['panel'])
+        if (not same(spec['glm_recipe']['master_source_inventory'],profile['pins']['sources'])
+          or {r['page_number']:r['source_sha256'] for r in metadata['requests'].values()}!=selected):
+            raise ValueError('GLM source recipe must bind exact original38 panel and frozen484 source inventory')
+    if ('requires_tiny_before_panel' in spec and type(spec['requires_tiny_before_panel']) is not bool):
+        raise ValueError('Explicit boolean tiny-before-panel policy required')
+    if 'tiny_page' in spec:
+        selected_numbers('tiny',selected,spec['tiny_page'])
+        if fresh and spec['tiny_page']!=spec['fresh_tiny_page']:
+            raise ValueError('Component and fresh-source tiny pages differ')
+    if spec.get('requires_tiny_before_panel') and 'tiny_page' not in spec:
+        raise ValueError('Prospectively bound component tiny page required')
     native=read(check(spec['native_summary']));closed=read(check(spec['native_closed_source']))
     if (native.get('status')!='COMPLETE' or native.get('pages_completed')!=484 or native.get('complete_full_inventory') is not True
       or native.get('selected_pages')!=list(range(1,485)) or len(native.get('page_results',[]))!=484
@@ -131,6 +154,7 @@ def load_eligibility(spec,check=checked):
 def load_components(spec,check=checked):
     """Resolve only explicitly selected, hash-bound experimental components."""
     result={}
+    if 'glm_ocr' in spec.get('active_components',[]):result['glm_loader']=load_glm_loader(spec,check)
     if 'fresh_source_cells' in spec.get('active_components',[]):
         for role,name in FRESH_DEPENDENCIES.items():
             record=spec['sources'][role];actual=Path(check(record)).resolve();existing=sys.modules.get(name)
@@ -151,7 +175,46 @@ def load_components(spec,check=checked):
         if (sys.modules.get(name) is not module or Path(module.__file__).resolve()!=actual
           or sha(actual)!=record['sha256']):raise ValueError('Actual component import/source differs: '+role)
         result[role]=module
+    if spec.get('quantity_only_source_contexts') is True:
+        if 'cell_association' not in result or 'fresh_source_cells' in result:
+            raise ValueError('Quantity-only contexts cannot silently enable or mix source components')
+        result['quantity_only_source_contexts']=True
     return result
+
+
+def load_glm_loader(spec,check=checked):
+    record=spec['sources'].get('glm_loader')
+    if record is None:raise ValueError('Pinned GLM read-manifest dependency required')
+    actual=Path(check(record)).resolve();existing=sys.modules.get('glm_read_manifest')
+    if existing is not None and (not getattr(existing,'__file__',None) or Path(existing.__file__).resolve()!=actual or sha(actual)!=record['sha256']):
+        raise ValueError('Unapproved preloaded GLM manifest loader')
+    module=existing if existing is not None else load('glm_read_manifest',actual)
+    if Path(module.__file__).resolve()!=actual or sha(actual)!=record['sha256']:raise ValueError('Actual GLM loader source differs')
+    return module
+
+
+def load_glm_reads(spec,record,numbers,check=checked):
+    active='glm_ocr' in spec.get('active_components',[])
+    if active!=(record is not None):raise ValueError('Explicit dynamic GLM reads pin required only for GLM arm')
+    if not active:return None
+    return load_glm_loader(spec,check).load_reads(spec['glm_recipe'],spec['sources']['glm_ocr'],record,numbers,check,spec['panel'])
+
+
+def glm_continuity(spec,previous,current,check=checked):
+    if 'glm_ocr' not in spec.get('active_components',[]):return
+    if previous.get('glm_recipe')!=spec['glm_recipe'] or current is None:raise ValueError('Same immutable GLM recipe required across scopes')
+    load_glm_loader(spec,check).continuation(previous.get('glm_request_records'),current['request_records'])
+
+
+def glm_reporting(runtime):
+    if not runtime:return {}
+    count=len(runtime['records'])
+    return {'glm_reads':deepcopy(runtime['manifest']),'glm_recipe':deepcopy(runtime['recipe']),
+      'glm_request_records':deepcopy(runtime['request_records']),
+      'retained_recognition_run_scope':'original_baseline_only',
+      'upstream_automated_GLM_source_requests':count,'upstream_automated_GLM_source_calls':count,
+      'upstream_automated_GLM_executed_images':count,'source_artifacts_shared_between_control_and_candidate':True,
+      'parser_new_model_calls':0,'GLM_numeric_confidence':None,'legacy_provenance_limitation':GLM_PROVENANCE_LIMITATION}
 
 
 def fresh_source_metadata(spec,check=checked):
@@ -273,8 +336,9 @@ def load_fresh_source_reads(spec,check=checked):
       'root_postclosure_raw_hash_seal':True,'worker_summary_seals_raw_hashes':False,'new_independent_engine_families':0,
       'source_reads_executed_before_parser':len(records),'parser_OCR_calls':0,'baseline_cache_modified':False}
 
-def pilot_gate(spec_record,spec,score_record,closed_record,check=checked):
+def pilot_gate(spec_record,spec,score_record,closed_record,check=checked,glm_runtime=None):
     score=read(check(score_record));closed=read(check(closed_record))
+    if 'glm_ocr' in spec.get('active_components',[]):glm_continuity(spec,score,glm_runtime or {'request_records':score.get('glm_request_records')},check)
     if (score.get('status')!='COMPLETE' or score.get('scope')!='CORRECTION_PILOT_PANEL'
       or not same(score.get('experiment'),spec_record) or not same(score.get('panel'),spec['panel'])
       or score.get('actual_scorer_invocations')!=2 or score.get('writer_readback_verified') is not True
@@ -301,17 +365,23 @@ def pilot_gate(spec_record,spec,score_record,closed_record,check=checked):
             if (done.get('scope')!='panel' or done.get('variant')!=('control','candidate')[index]
               or not same(run.get('experiment'),spec_record) or not same(run.get('panel'),spec['panel'])
               or run.get('reference_access') is not False):raise ValueError('Pilot parser completion/source binding differs')
+            if 'glm_ocr' in spec.get('active_components',[]) and (not same(run.get('glm_reads'),score.get('glm_reads')) or run.get('glm_request_records')!=score.get('glm_request_records')):
+                raise ValueError('Pilot GLM parser pair/score source binding differs')
     return score
 
 
-def fresh_tiny_gate(spec_record,spec,score_record,closed_record,check=checked):
+def tiny_gate(spec_record,spec,score_record,closed_record,check=checked,glm_runtime=None):
     """A real source-bound writer/scorer path before the38-page experiment."""
-    if not score_record or not closed_record:raise ValueError('Actual closed fresh-source tiny required before38-page pilot')
+    if not score_record or not closed_record:raise ValueError('Actual closed source-bound tiny required before38-page pilot')
     score=read(check(score_record));closed=read(check(closed_record))
+    if 'glm_ocr' in spec.get('active_components',[]):glm_continuity(spec,score,glm_runtime or {'request_records':score.get('glm_request_records')},check)
     safety=score.get('safety') or {}
+    fresh='fresh_source_manifest' in spec
+    manifest_matches=(same(score.get('fresh_source_manifest'),spec['fresh_source_manifest']) if fresh
+                      else score.get('fresh_source_manifest') is None)
     if (score.get('status')!='COMPLETE' or score.get('scope')!='CORRECTION_SOURCE_TINY'
       or not same(score.get('experiment'),spec_record) or not same(score.get('panel'),spec['panel'])
-      or not same(score.get('fresh_source_manifest'),spec.get('fresh_source_manifest'))
+      or not manifest_matches
       or score.get('processed_images')!=1 or score.get('actual_scorer_invocations')!=2
       or score.get('writer_readback_verified') is not True or score.get('prior323_lost')!=0
       or safety.get('exact_loss_count')!=0 or safety.get('new_wrong_count_all602')!=0
@@ -332,11 +402,27 @@ def fresh_tiny_gate(spec_record,spec,score_record,closed_record,check=checked):
             raise ValueError('Actual tiny child/source differs')
         if index<2:
             done=read(check(record));run=read(check(done['run_manifest']))
-            if (done.get('scope')!='tiny' or done.get('variant')!=('control','candidate')[index]
+            run_manifest_matches=(same(run.get('fresh_source_manifest'),spec['fresh_source_manifest']) if fresh
+                                  else run.get('fresh_source_manifest') is None)
+            if (done.get('status')!='COMPLETE' or done.get('writer_readback_verified') is not True
+              or done.get('reference_access') is not False
+              or done.get('scope')!='tiny' or done.get('variant')!=('control','candidate')[index]
               or done.get('pages')!=1 or not same(run.get('experiment'),spec_record)
-              or not same(run.get('fresh_source_manifest'),spec.get('fresh_source_manifest'))
+              or not run_manifest_matches
               or run.get('reference_access') is not False):raise ValueError('Tiny completion/source differs')
+            if spec.get('requires_tiny_before_panel'):
+                inventory=done.get('source_inventory')
+                if (not isinstance(inventory,list) or len(inventory)!=1
+                  or inventory[0].get('page_number')!=spec['tiny_page']):
+                    raise ValueError('Tiny actual page differs from prospectively bound source')
+            if 'glm_ocr' in spec.get('active_components',[]) and (not same(run.get('glm_reads'),score.get('glm_reads')) or run.get('glm_request_records')!=score.get('glm_request_records')):
+                raise ValueError('Tiny GLM parser pair/score source binding differs')
     return score
+
+
+def fresh_tiny_gate(spec_record,spec,score_record,closed_record,check=checked):
+    """Compatibility entry point for previously pinned fresh-source factories."""
+    return tiny_gate(spec_record,spec,score_record,closed_record,check)
 
 def nonempty(field):
     return isinstance(field,dict) and any(v is not None and (not isinstance(v,str) or bool(v.strip())) for v in (field.get('raw_value'),field.get('normalized_value')))
@@ -360,18 +446,26 @@ def outdir(spec,path):
     if not path.is_relative_to(Path(spec['results_root']).resolve()) or path.exists():raise ValueError('New isolated correction output required')
     path.mkdir(parents=True);return path
 
-def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=None):
+def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=None,glm_reads=None):
     spec,profile,sources,panel,native,control=preflight(experiment_record)
     if variant not in ('control','candidate'):raise ValueError('Explicit parser arm required')
-    if scope=='full484':pilot_gate(experiment_record,spec,pilot_score,pilot_closed)
-    if scope=='panel' and 'fresh_source_cells' in spec.get('active_components',[]):fresh_tiny_gate(experiment_record,spec,pilot_score,pilot_closed)
-    numbers=selected_numbers(scope,panel,spec.get('fresh_tiny_page'));out=outdir(spec,output);began=time.monotonic()
+    numbers=selected_numbers(scope,panel,spec.get('tiny_page',spec.get('fresh_tiny_page')))
+    glm_data=load_glm_reads(spec,glm_reads,numbers)
+    if scope=='full484':pilot_gate(experiment_record,spec,pilot_score,pilot_closed,glm_runtime=glm_data)
+    if scope=='panel' and ('fresh_source_cells' in spec.get('active_components',[]) or spec.get('requires_tiny_before_panel')):
+        tiny_gate(experiment_record,spec,pilot_score,pilot_closed,glm_runtime=glm_data)
+    out=outdir(spec,output);began=time.monotonic()
     shared=load('_correction_stream',checked(profile['pins']['shared']))
     bridge=guard=helpers=None
     if variant=='candidate':
-        load_eligibility(spec)
+        eligibility=load_eligibility(spec)
         helpers=runtime(profile);bridge=load('correction_bridge',checked(spec['sources']['bridge']))
         helpers.update(load_components(spec));helpers['correction_bridge']=bridge
+        if glm_data:
+            grammar=sys.modules.get('ocr_inbound.literal_uom_grammar')
+            if eligibility is None or grammar is None:raise ValueError('Pinned literal grammar/row policy required for GLM admission')
+            helpers['grammar']=grammar
+            helpers['row_eligible']=lambda row:eligibility.assess_row(row,helpers['rules']).get('eligible') is True
         if 'fresh_source_cells' in spec.get('active_components',[]):
             helpers['fresh_source_reads']=load_fresh_source_reads(spec)
         guard=load('correction_guard',checked(spec['sources']['guard']))
@@ -388,6 +482,9 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
         run.update(fresh_source_manifest=spec['fresh_source_manifest'],
           fresh_source_observations_were_read_before_parser=True,
           additional_independent_engine_families=0,baseline_cache_modified=False)
+    if glm_data:
+        run.update(**glm_reporting(glm_data),
+                   glm_source_observations_executed_before_parser=True,GLM_confidence_substituted_for_Paddle=False)
     save(out/'run_manifest.json',run)
     with (out/'page_extractions.json').open('x',encoding='utf8') as stream:
         stream.write('{"pages":[');first=True
@@ -405,6 +502,12 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
                   or any(flags.get(k) is not False for k in ('reference','human_answers','Ada','StockDay')) or flags.get('assistant_image_reads')!=0
                   or observation.get('page')!=n or observation.get('source_image',{}).get('sha256')!=parent['source_sha256']):raise ValueError('Unbound/assisted retained input')
                 sealed=digest([item,observation]);upright=helpers['io'].upright_from_original(parent,g,helpers['mapper'])
+                if glm_data:
+                    record=glm_data['records'][n];request=record['request'];inputs=request['source_inputs']
+                    if (not same(inputs.get('cache'),cache[n]) or not same(inputs.get('native'),observation_pin)
+                      or digest(read(checked(inputs['canonical'])))!=before):raise ValueError('GLM request original cache/native/canonical source differs')
+                    helpers['glm_source_record']={'observation':record['observation'],'pin':record['pin']}
+                    helpers['glm_identity']=record['identity']
                 proposal=bridge.propose_and_apply(upright,item,observation,helpers,observation_pin)
                 guarded,audit=guard.conserve_corrections(upright,proposal,item,observation,helpers,observation_pin)
                 mapped=helpers['mapper'](helpers['io'].core(guarded),g['original_size'],g['orientation_ccw'])
@@ -421,6 +524,10 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
                   'final_acceptance_authority':'document_ai_correction_conservation','effective_changes_coordinate_space':'original_image',
                   'bridge_proposal_coordinate_space':'upright_image'}
                 candidate['document_ai_correction_conservation']={'upright_policy':audit,'original_projection':projection,'audit_coordinate_space':'upright_image','canonical_coordinate_space':'original_image'}
+                if glm_data:
+                    candidate['document_ai_GLM_source']={**glm_reporting({**glm_data,'records':{n:glm_data['records'][n]},
+                        'request_records':{str(n):glm_data['request_records'][str(n)]}}),
+                        'original_recognition_run_preserved':True,'receiving_approval':False}
                 typed=helpers['finalize'](candidate,source_sha256=parent['source_sha256'],image_size=g['original_size'])
                 save(out/f'typed_results/page-{n:04d}.json',typed)
                 if read(out/f'typed_results/page-{n:04d}.json')!=typed or typed['raw_page_sha256']!=digest(candidate):raise ValueError('Typed correction writer readback differs')
@@ -432,7 +539,10 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
             first=False;json.dump(candidate,stream,ensure_ascii=False,allow_nan=False)
             inventory.append({'page_number':n,'source_sha256':parent['source_sha256'],'parent_content_sha256':before,
               'prediction_content_sha256':digest(candidate),'changes':events,'guard_status':audit.get('status')})
-        stream.write('],"metadata":{"assistant_overlays":false,"vision_llm_calls":0,"new_OCR_calls":0}}')
+        metadata={'assistant_overlays':False,'vision_llm_calls':0,'new_OCR_calls':0}
+        if glm_data:metadata.update(vision_llm_calls=len(glm_data['records']),parser_stage_vision_llm_calls=0,
+            scope='combined_automated_source_evidence',vision_llm_calls_scope='completed_upstream_GLM_requests_reused_by_current_parser',**glm_reporting(glm_data))
+        stream.write('],"metadata":');json.dump(metadata,stream,ensure_ascii=False,allow_nan=False);stream.write('}')
     if seen!=numbers:raise ValueError('Incomplete selected canonical source union')
     done={'status':'COMPLETE','scope':scope,'variant':variant,'pages':len(seen),'source_inventory':inventory,'revision_counts':counts,
       'prediction':pin(out/'page_extractions.json'),'run_manifest':pin(out/'run_manifest.json'),'elapsed_seconds':time.monotonic()-began,
@@ -441,6 +551,7 @@ def parse(experiment_record,scope,variant,output,pilot_score=None,pilot_closed=N
         done.update(fresh_source_manifest=spec['fresh_source_manifest'],
           fresh_source_observation_requests=46,additional_independent_engine_families=0,
           baseline_cache_modified=False,source_reading_effect_separate_from_training=True)
+    if glm_data:done.update(**glm_reporting(glm_data))
     save(out/'COMPLETE.json',done);return pin(out/'COMPLETE.json')
 
 def compare_panel(reference,metrics,shared,scorer,prior,mapping,primary_names=None):
@@ -481,8 +592,9 @@ def compare_panel(reference,metrics,shared,scorer,prior,mapping,primary_names=No
               'new_wrong':sum(all_a[k]!='wrong' and all_b[k]=='wrong' for k in allkeys),'new_falsefills':sum(list(k) in falsefills for k in abskeys)})
     return result
 
-def score(experiment_record,scope,control_path,candidate_path,output):
-    spec,profile,sources,panel,native,baseline=preflight(experiment_record);numbers=selected_numbers(scope,panel,spec.get('fresh_tiny_page'))
+def score(experiment_record,scope,control_path,candidate_path,output,glm_reads=None):
+    spec,profile,sources,panel,native,baseline=preflight(experiment_record);numbers=selected_numbers(scope,panel,spec.get('tiny_page',spec.get('fresh_tiny_page')))
+    glm_data=load_glm_reads(spec,glm_reads,numbers)
     from eval_assets import preflight as metric_preflight
     metric_preflight(profile)
     shared=load('_correction_score_shared',checked(profile['pins']['shared']));scorer=load('_correction_frozen_scorer',checked(profile['pins']['scorer']))
@@ -492,7 +604,9 @@ def score(experiment_record,scope,control_path,candidate_path,output):
         run=read(checked(item['run_manifest']))
         if (item.get('status')!='COMPLETE' or item.get('scope')!=scope or item.get('variant')!=name
           or not same(run.get('experiment'),experiment_record) or run.get('reference_access') is not False):raise ValueError('Actual matched correction parser completions required')
-        if scope=='full484':pilot_gate(experiment_record,spec,run['pilot_score'],run['pilot_closed'])
+        if glm_data and (not same(run.get('glm_reads'),glm_reads) or run.get('glm_recipe')!=spec['glm_recipe'] or run.get('glm_request_records')!=glm_data['request_records']):
+            raise ValueError('Actual GLM parser pair/raw source manifest differs')
+        if scope=='full484':pilot_gate(experiment_record,spec,run['pilot_score'],run['pilot_closed'],glm_runtime=glm_data)
         if scope=='panel' and 'fresh_source_cells' in spec.get('active_components',[]):fresh_tiny_gate(experiment_record,spec,run['pilot_score'],run['pilot_closed'])
     reference=read(checked(profile['pins']['reference']));full_reference=reference;mapping=read(checked(profile['pins']['mapping']));prior=read(checked(profile['pins']['prior323']))
     groups.validate_mapping(mapping,sources)
@@ -505,7 +619,10 @@ def score(experiment_record,scope,control_path,candidate_path,output):
             if n in seen or n not in numbers or page['source_sha256']!=sources[n]['sha256']:raise ValueError('Unbound scored correction source')
             seen.add(n);pages.append(shared.validated_compact_page(page,scorer))
         if seen!=numbers:raise ValueError('Scoring selected union differs')
-        prediction={'pages':pages,'metadata':{'assistant_overlays':False,'vision_llm_calls':0}}
+        metadata={'assistant_overlays':False,'vision_llm_calls':0}
+        if glm_data:metadata.update(vision_llm_calls=len(glm_data['records']),parser_stage_vision_llm_calls=0,
+            scope='combined_automated_source_evidence',vision_llm_calls_scope='completed_upstream_GLM_requests_reused_by_current_scorer',**glm_reporting(glm_data))
+        prediction={'pages':pages,'metadata':metadata}
         if not groups.provenance(prediction,{n:sources[n] for n in numbers})['passed']:raise ValueError('Machine-only correction provenance failed')
         metric=scorer.assess(reference,prediction,machine_only=True);save(out/(name+'_metrics.json'),metric)
         if read(out/(name+'_metrics.json'))!=metric:raise ValueError('Actual metric writer readback failed')
@@ -521,11 +638,14 @@ def score(experiment_record,scope,control_path,candidate_path,output):
         result.update(fresh_source_manifest=spec['fresh_source_manifest'],fresh_source_observation_requests=46,
           additional_independent_engine_families=0,baseline_cache_modified=False,
           source_reading_effect_separate_from_training=True)
+    if glm_data:result.update(**glm_reporting(glm_data))
     result['coverage_summary']=frozen.coverage_summary(full_reference,len(numbers),metrics[0])
     result['coverage_summary'].update(parser_processed_images=len(numbers),previously_processed_native_geometry_images=484,
       selected_reference_product_fields=result['product_present_denominator'],selected_reference_all_present_fields=result['safety']['scope_present'],
       selected_absence_fields=result['safety']['absence_scope_separate'],new_model_images=0,
       meaning='Agreement only on selected frozen labels; panel is not all585/full484 accuracy; original full coverage remains separately reported')
+    if glm_data:result['coverage_summary'].update(previously_executed_automated_GLM_source_images=len(glm_data['records']),
+      parser_new_model_calls=0,legacy_provenance_limitation=GLM_PROVENANCE_LIMITATION)
     save(out/'RESULT.json',result)
     if read(out/'RESULT.json')!=result:raise ValueError('Actual paired result readback failed')
     return pin(out/'RESULT.json')
@@ -536,6 +656,7 @@ def main():
     p.add_argument('--scope',choices=('tiny','panel','full484'));p.add_argument('--variant',choices=('control','candidate'))
     p.add_argument('--output',type=Path);p.add_argument('--control',type=Path);p.add_argument('--candidate',type=Path)
     p.add_argument('--pilot-score',type=Path);p.add_argument('--pilot-score-sha256');p.add_argument('--pilot-closed',type=Path);p.add_argument('--pilot-closed-sha256')
+    p.add_argument('--glm-reads',type=Path);p.add_argument('--glm-reads-sha256')
     p.add_argument('--execute',action='store_true');p.add_argument('--admission',type=Path);p.add_argument('--admission-sha256');a=p.parse_args()
     record={'path':str(a.experiment.resolve()),'sha256':a.experiment_sha256}
     if not a.execute or a.action=='preflight':
@@ -544,8 +665,10 @@ def main():
     if a.action=='parse':
         result=parse(record,a.scope,a.variant,a.output,
           {'path':str(a.pilot_score.resolve()),'sha256':a.pilot_score_sha256} if a.pilot_score else None,
-          {'path':str(a.pilot_closed.resolve()),'sha256':a.pilot_closed_sha256} if a.pilot_closed else None)
-    else:result=score(record,a.scope,a.control,a.candidate,a.output)
+          {'path':str(a.pilot_closed.resolve()),'sha256':a.pilot_closed_sha256} if a.pilot_closed else None,
+          {'path':str(a.glm_reads.resolve()),'sha256':a.glm_reads_sha256} if a.glm_reads else None)
+    else:result=score(record,a.scope,a.control,a.candidate,a.output,
+          {'path':str(a.glm_reads.resolve()),'sha256':a.glm_reads_sha256} if a.glm_reads else None)
     print(result)
 
 if __name__=='__main__':main()

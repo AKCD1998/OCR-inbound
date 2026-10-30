@@ -187,7 +187,8 @@ class FreshManifestTests(unittest.TestCase):
             children=[]
             for variant in ('control','candidate'):
                 run=put(variant+'-run.json',{'experiment':experiment,'fresh_source_manifest':source,'reference_access':False})
-                children.append(put(variant+'.json',{'scope':'tiny','variant':variant,'pages':1,'run_manifest':run}))
+                children.append(put(variant+'.json',{'status':'COMPLETE','writer_readback_verified':True,
+                    'reference_access':False,'scope':'tiny','variant':variant,'pages':1,'run_manifest':run}))
             score={'status':'COMPLETE','scope':'CORRECTION_SOURCE_TINY','experiment':experiment,'panel':panel,
                 'fresh_source_manifest':source,'processed_images':1,'actual_scorer_invocations':2,'writer_readback_verified':True,
                 'prior323_lost':0,'safety':{'exact_loss_count':0,'new_wrong_count_all602':0,'new_absence_falsefill_count':0},

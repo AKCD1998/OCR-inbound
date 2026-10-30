@@ -128,6 +128,62 @@ def _row_barriers(page,primary,secondary,domain,header,helpers):
             'primary_detection':deepcopy(token),'secondary_detection':deepcopy(other),'positive_goods_anchor':False})
     return barriers
 
+def _quantity_only_header(clean,primary,core,bridge,size):
+    """An explicit Q-only route, with no inferred UOM column or value.
+
+    Both neighbouring *whole heading text edges* bound the quantity column.
+    Every other heading remains a competing boundary. This cannot repair a
+    conflicting/ambiguous target heading, reuse Unit Price as UOM, or borrow a
+    field answer to assign a column.
+    """
+    header=bridge._literal_header(clean,core,size,required_roles=('description','quantity'))
+    if (not header or header['ambiguous'] or 'unit' in header['anchors']
+            or any(t.score is None or t.score<.70 for g in header['anchors'].values() for t in g)):
+        return None,None
+    lookup={t['token_id']:t for t in primary};groups=[];used=set()
+    for role,words in header['anchors'].items():
+        if not words or any(t.id not in lookup for t in words):return None,None
+        ids={t.id for t in words}
+        if used&ids:return None,None
+        used.update(ids);actual=[lookup[t.id] for t in words];box=_union(actual)
+        groups.append(((box[0]+box[2])/2,role,actual,box))
+    groups.sort(key=lambda x:(x[0],x[1]))
+    selected=[i for i,g in enumerate(groups) if g[1]=='quantity']
+    if len(selected)!=1 or selected[0] in (0,len(groups)-1):return None,None
+    index=selected[0];_,_,quantity,qbox=groups[index]
+    _,left_role,left,left_box=groups[index-1];_,right_role,right,right_box=groups[index+1]
+    gap=[left_box[2],right_box[0]]
+    if not gap[0]<qbox[0]<qbox[2]<gap[1]:return None,None
+    if any(role!='quantity' and box[0]<gap[1] and box[2]>gap[0] for _,role,_,box in groups):
+        return None,None
+    # A highest-score representative is not the full negative inventory.
+    # Keep every coherent maximal printed phrase, even lower-confidence,
+    # same-centre price variants whose whole boxes intrude into the gap.
+    parts=core._header_parts([t for t in clean if t.cy<size[1]*.70])
+    parts=[(role,g) for role,g in parts if not any({t.id for t in g}<{t.id for t in other} for _,other in parts)]
+    all_headers=[];seen=set()
+    for role,words in parts:
+        if any(t.id not in lookup for t in words):return None,None
+        actual=[lookup[t.id] for t in words];box=_union(actual)
+        if (not max(box[1],header['bbox'][1])<min(box[3],header['bbox'][3])
+                and abs((box[1]+box[3]-qbox[1]-qbox[3])/2)>header['mh']*1.8):continue
+        key=(role,tuple(t.id for t in words))
+        if key in seen:continue
+        seen.add(key)
+        if role=='unit' or (role!='quantity' and box[0]<gap[1] and box[2]>gap[0]):return None,None
+        if role=='quantity' and not gap[0]<=box[0]<box[2]<=gap[1]:return None,None
+        all_headers.append({'role':role,'tokens':deepcopy(actual),'bbox':box})
+    original=header['bounds']['quantity'];bounds=[max(original[0],gap[0]),min(original[1],gap[1])]
+    if not 0<bounds[0]<qbox[0]<qbox[2]<bounds[1]<size[0]:return None,None
+    header=deepcopy(header);header['bounds']['quantity']=bounds
+    proof={'method':'EXPLICIT_QUANTITY_ONLY_PRIMARY_LITERAL_HEADERS','required_roles':['description','quantity'],
+        'quantity_header_tokens':deepcopy(quantity),'left_header':{'role':left_role,'tokens':deepcopy(left)},
+        'right_header':{'role':right_role,'tokens':deepcopy(right)},'adjacent_heading_text_gap':gap,
+        'all_coherent_primary_header_groups':all_headers,
+        'legacy_midpoint_column_bounds':deepcopy(original),'source_column_bounds':deepcopy(bounds),
+        'unit_inferred':False,'physical_cell_borders_claimed':False}
+    return header,proof
+
 def _contexts(page,cache,observation,helpers,pin):
     regions,primary,secondary,alternatives=_inputs(page,cache,observation,helpers,pin)
     rules,core,bridge=(helpers[k] for k in ('rules','core','correction_bridge'))
@@ -138,6 +194,12 @@ def _contexts(page,cache,observation,helpers,pin):
         local=[t for t in primary if rules._inside(t['bbox'],domain['bbox'])]
         clean,_=core._read([{**t,'box':t['bbox']} for t in local],'primary',size)
         header=bridge._literal_header(clean,core,size)
+        context_roles=ROLES;quantity_only_proof=None
+        if helpers.get('quantity_only_source_contexts') is True and (not header or header['ambiguous']
+                or any(t.score is None or t.score<.70 for g in header['anchors'].values() for t in g)):
+            fallback,proof=_quantity_only_header(clean,local,core,bridge,size)
+            if fallback is not None:
+                header=fallback;context_roles=('quantity',);quantity_only_proof=proof
         if (not header or header['ambiguous'] or any(t.score is None or t.score<.70 for g in header['anchors'].values() for t in g)):
             rejected.append({'reason':'unambiguous_whole_literal_headers_required'});continue
         if any(t['bbox'][3]<=header['bottom'] and rules.NONRECEIPT_TITLE.search(t['text']) for t in primary+secondary+alternatives):
@@ -159,7 +221,7 @@ def _contexts(page,cache,observation,helpers,pin):
                for a,b in zip(ordered,ordered[1:])):
             rejected.append({'reason':'disjoint_source_row_baselines_required'});continue
         header_words={role:[lookup[t.id] for t in words] for role,words in header['anchors'].items()}
-        if any(core._role(' '.join(t['text'] for t in header_words[k]))!=k for k in ('description',*ROLES)):
+        if any(core._role(' '.join(t['text'] for t in header_words[k]))!=k for k in ('description',*context_roles)):
             rejected.append({'reason':'whole_literal_header_role_differs'});continue
         body_top=max(header['bottom'],min(a['token']['bbox'][1]-.75*rules._height(a['token']['bbox']) for a in ordered))
         body_bottom=max(a['token']['bbox'][3]+.75*rules._height(a['token']['bbox']) for a in ordered)
@@ -183,21 +245,23 @@ def _contexts(page,cache,observation,helpers,pin):
                     'heading_token_ids':[t['token_id'] for t in all_header_words],'content_detections':content,
                     'value_unit_type_filtering_applied':False}}
         columns={};boundaries={}
-        for role in ROLES:
+        for role in context_roles:
             left,right=header['bounds'][role];left_kind=right_kind='ADJACENT_LITERAL_HEADER_MIDPOINT'
+            if quantity_only_proof is not None:
+                left_kind=right_kind='INTERSECTION_OF_LITERAL_MIDPOINT_AND_WHOLE_HEADING_TEXT_GAP'
             edge_kind='ACTUAL_ROI_EDGE' if domain['kind']=='ACTUAL_NATIVE_TABLE_ROI' else 'SOURCE_CONTENT_EXTENT'
             if left==0:left=region['bbox'][0];left_kind=edge_kind
             if right==size[0]:right=region['bbox'][2];right_kind=edge_kind
             columns[role]=[left,right];boundaries[role]={'left':left_kind,'right':right_kind}
-        bounds=[columns[k] for k in ROLES]
+        bounds=[columns[k] for k in context_roles]
         if (any(not region['bbox'][0]<=left<right<=region['bbox'][2] for left,right in bounds)
-                or max(bounds[0][0],bounds[1][0])<min(bounds[0][1],bounds[1][1])):
+                or len(bounds)==2 and max(bounds[0][0],bounds[1][0])<min(bounds[0][1],bounds[1][1])):
             rejected.append({'reason':'disjoint_bounded_quantity_and_unit_columns_required'});continue
         # Whole competing heading boxes, including neutral prices, cannot
         # intrude merely because their centres fall outside a proposed column.
         if any(other not in (role,'description') and min(t['bbox'][0] for t in words)<columns[role][1]
                and max(t['bbox'][2] for t in words)>columns[role][0]
-               for role in ROLES for other,words in header_words.items()):
+               for role in context_roles for other,words in header_words.items()):
             rejected.append({'reason':'competing_whole_heading_intrudes_source_column'});continue
         peer_rows=[{'row_index':a['row_index'],'token_ids':[t['token_id'] for t in a['tokens']],
                     'bbox':deepcopy(a['token']['bbox']),'eligible':a['eligibility']['eligible']} for a in ordered]
@@ -225,7 +289,7 @@ def _contexts(page,cache,observation,helpers,pin):
             if any((rules.SET.search(t['text']) or rules.FOOTER.search(t['text']) or BONUS.search(t['text']))
                    and rules._intersection(t['bbox'],row_band) for t in primary+secondary+alternatives):
                 rejected.append({'row_index':anchor['row_index'],'reason':'source_set_bonus_footer_in_row_band'});continue
-            for role in ROLES:
+            for role in context_roles:
                 left,right=columns[role];band=[left,top,right,bottom]
                 if not region['bbox'][0]<=left<right<=region['bbox'][2]:continue
                 evidence={'route':'SOURCE_HEADER_ROW_BAND','coordinate_space':'upright_image',
@@ -241,6 +305,8 @@ def _contexts(page,cache,observation,helpers,pin):
                     'role_header_tokens':deepcopy(header_words[role]),
                     'whole_source_headers':deepcopy(header_words),
                     'description_column_proof':deepcopy(anchor['description_column_proof'])}
+                if quantity_only_proof is not None:
+                    evidence['quantity_only_header_proof']=deepcopy(quantity_only_proof)
                 if len(contexts)>=LIMIT:raise ValueError('bounded_source_context_inventory_required')
                 contexts.append({'row_index':anchor['row_index'],'role':role,'source_band':band,
                     'anchor':deepcopy(anchor),'region':region,'evidence':evidence,

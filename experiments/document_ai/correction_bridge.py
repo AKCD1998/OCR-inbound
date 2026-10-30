@@ -26,13 +26,15 @@ def _compact(value):
     return re.sub(r'\s+', '', str(value or '')).casefold()
 
 
-def _literal_header(clean, core, size):
+def _literal_header(clean, core, size, *, required_roles=('description', 'quantity', 'unit')):
     """Group exact printed phrases, including same-role subphrase suppression.
 
     'Description' inside 'Product Description' is one heading, not two distant
     competing description columns. Unit inside Unit Price is likewise never
     an independent UOM heading. No fuzzy role repair or supplier order is used.
     """
+    if required_roles not in (('description', 'quantity', 'unit'), ('description', 'quantity')):
+        raise ValueError('Explicit legacy or quantity-only literal header roles required')
     if not clean:
         return None
     parts = core._header_parts([t for t in clean if t.cy < size[1] * .70])
@@ -54,7 +56,8 @@ def _literal_header(clean, core, size):
                 ambiguous.append(role)
             else:
                 anchors[role] = chosen
-        if not {'description', 'quantity', 'unit'}.issubset(anchors) or set(ambiguous).intersection(('description', *EDITABLE)):
+        if (not set(required_roles).issubset(anchors) or set(ambiguous).intersection(required_roles)
+                or required_roles == ('description', 'quantity') and len(anchors) < 3):
             continue
         selected = list(dict.fromkeys(t for g in anchors.values() for t in g))
         box = core._bbox(selected)
@@ -409,11 +412,14 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
     native=_native_propose_and_apply(page,cache,observation,helpers,observation_pin)
     cells=helpers.get('cell_association')
     fresh=helpers.get('fresh_source_cells')
-    if cells is None and fresh is None:
+    glm=helpers.get('glm_ocr');glm_record=helpers.get('glm_source_record')
+    if cells is None and fresh is None and glm is None:
         return native
     frozen=digest([page,cache,observation])
     source=cells.propose(page,cache,observation,helpers,observation_pin) if cells is not None else {}
     reread=fresh.propose(page,cache,observation,helpers,observation_pin) if fresh is not None else {}
+    glm_audit=(glm.propose(page,cache,glm_record['observation'],helpers,glm_record['pin'])
+               if glm is not None and isinstance(glm_record,dict) else {})
     if digest([page,cache,observation])!=frozen:
         raise ValueError('Source cell association mutated retained inputs')
     native_audit=native['document_ai_correction_association']
@@ -427,15 +433,19 @@ def propose_and_apply(page, cache, observation, helpers, observation_pin):
         audit['fresh_source_route']=deepcopy(reread)
         audit['fresh_read_manifest']=deepcopy((helpers.get('fresh_source_reads') or {}).get('manifest'))
         audit['fresh_reads_are_additional_observations_not_extra_independent_families']=True
+    if glm is not None:
+        audit['glm_route']=deepcopy(glm_audit)
+        audit['GLM_numeric_confidence']=None
+        audit['source_confidence_gates_apply_to']='legacy_Paddle_Tesseract_routes_only'
     if 'document_admission' in native_audit:
         audit['document_admission']=deepcopy(native_audit['document_admission'])
     out=deepcopy(page);out['document_ai_correction_association']=audit
-    raw_proposals=native_audit.get('proposed',[])+source.get('proposed',[])+reread.get('proposed',[])
+    raw_proposals=native_audit.get('proposed',[])+source.get('proposed',[])+reread.get('proposed',[])+glm_audit.get('proposed',[])
     audit['proposed']=deepcopy(raw_proposals[:LIMIT])
     audit['truncated_decisions']=max(0,len(raw_proposals)-LIMIT)
-    audit['rejected']=deepcopy((native_audit.get('rejected',[])+source.get('rejected',[])+reread.get('rejected',[]))[:LIMIT])
+    audit['rejected']=deepcopy((native_audit.get('rejected',[])+source.get('rejected',[])+reread.get('rejected',[])+glm_audit.get('unconfirmed',[]))[:LIMIT])
     groups={}
-    for change in native_audit.get('changes',[])+source.get('changes',[])+reread.get('changes',[]):
+    for change in native_audit.get('changes',[])+source.get('changes',[])+reread.get('changes',[])+glm_audit.get('changes',[]):
         key=(change['row_index'],change['field']);groups.setdefault(key,[]).append(change)
     if len(groups)>LIMIT:
         audit['rejected'].append({'reason':'bounded_combined_change_inventory_required'})

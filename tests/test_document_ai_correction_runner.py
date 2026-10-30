@@ -93,6 +93,29 @@ class CorrectionRunner(unittest.TestCase):
         valid['sources']['document_admission']=component
         result=runner.preflight(add('with-component',valid),check)
         self.assertEqual(12,len(result[3]))
+        with_tiny={**valid,'requires_tiny_before_panel':True,'tiny_page':3}
+        self.assertEqual(12,len(runner.preflight(add('with-component-tiny',with_tiny),check)[3]))
+        for scenario in ('missing-page','outside-panel','boolean-page','nonboolean-policy'):
+            bad=deepcopy(with_tiny)
+            if scenario=='missing-page':bad.pop('tiny_page')
+            elif scenario=='outside-panel':bad['tiny_page']=400
+            elif scenario=='boolean-page':bad['tiny_page']=True
+            else:bad['requires_tiny_before_panel']=1
+            with self.subTest(tiny=scenario),self.assertRaises(ValueError):
+                runner.preflight(add('invalid-tiny-'+scenario,bad),check)
+        quantity=deepcopy(with_tiny)
+        quantity['active_components']=['cell_association']
+        quantity['sources'].pop('document_admission')
+        quantity['sources']['cell_association']=component
+        quantity['quantity_only_source_contexts']=True
+        runner.preflight(add('quantity-only',quantity),check)
+        for scenario in ('implicit-cell','nonboolean-opt-in'):
+            bad=deepcopy(quantity)
+            if scenario=='implicit-cell':
+                bad['active_components']=[];bad['sources'].pop('cell_association')
+            else:bad['quantity_only_source_contexts']=1
+            with self.subTest(quantity=scenario),self.assertRaises(ValueError):
+                runner.preflight(add('invalid-quantity-'+scenario,bad),check)
         for scenario in ('missing-source','disabled-source','duplicate','unknown','not-a-name'):
             bad=deepcopy(valid)
             if scenario=='missing-source':bad['sources'].pop('document_admission')
@@ -137,10 +160,14 @@ class CorrectionRunner(unittest.TestCase):
                 for dependency,module_name in runner.FRESH_DEPENDENCIES.items():
                     dep=self.root/(module_name+'.py');dep.write_text('MARKER = "synthetic dependency"\n',encoding='utf8')
                     spec['sources'][dependency]=c.pin(dep)
+            if role=='glm_ocr':
+                dep=self.root/'glm_read_manifest.py';dep.write_text('MARKER = "synthetic loader"\n',encoding='utf8')
+                spec['sources']['glm_loader']=c.pin(dep)
             with self.subTest(role=role),patch.dict(sys.modules):
                 sys.modules.pop(name,None)
                 if role=='fresh_source_cells':
                     for module_name in runner.FRESH_DEPENDENCIES.values():sys.modules.pop(module_name,None)
+                if role=='glm_ocr':sys.modules.pop('glm_read_manifest',None)
                 modules=runner.load_components(spec)
                 self.assertEqual('synthetic',modules[role].MARKER)
                 self.assertEqual(path.resolve(),Path(modules[role].__file__).resolve())

@@ -16,6 +16,7 @@ from component_common import valid_box
 
 VERSION = 'source-bound-quantity-unit-revisions.v6'
 ROLES = frozenset(('quantity', 'unit'))
+GLM_POLICY = 'GLM_PRINTED_TABLE_PLUS_INDEPENDENT_TESS_V1'
 
 
 def _literal(text):
@@ -244,6 +245,32 @@ def _proof(before, row_index, role, field, evidence, cache, observation,
         raise ValueError('explicit_candidate_and_source_proof_required')
     if field.get('human_approved') is not False:
         raise ValueError('unreviewed_machine_candidate_required')
+    if evidence.get('policy')==GLM_POLICY:
+        policy=helpers.get('glm_ocr');record=helpers.get('glm_source_record')
+        if policy is None or not isinstance(record,dict):
+            raise ValueError('explicit_closed_GLM_source_component_required')
+        geometry=cache.get('geometry') or {}
+        if geometry.get('machine_only') is not True or geometry.get('vision_LLM_calls')!=0:
+            raise ValueError('machine_only_retained_geometry_required')
+        context=policy.verify(before,cache,record['observation'],helpers,record['pin'],row_index,role,evidence)
+        word=context['token']
+        if (context['before']!=(before['product_rows'][row_index].get('fields') or {}).get(role)
+          or field.get('raw_value')!=context['value'] or field.get('normalized_value')!=context['normalized_value']
+          or field.get('bbox')!=word['bbox'] or field.get('token_ids')!=[word['token_id']]
+          or field.get('confidence') is not None or field.get('model_confidence') is not None
+          or field.get('engine')!='GLM_OCR_CORROBORATED_BY_ACTUAL_TESSERACT'
+          or field.get('glm_printed_evidence')!=context['evidence']
+          or field.get('source_bbox_kind')!='actual_independent_Tess_whole_detection_not_GLM_glyph'
+          or field.get('receiving_approval') is not False or field.get('business_correction_applied') is not False
+          or not _same_token(field.get('corroborating_observation'),word)
+          or word['confidence']<.70 or word not in source[1]):
+            raise ValueError('GLM_literal_or_actual_independent_source_differs')
+        spans=field.get('source_spans')
+        if not isinstance(spans,list) or len(spans)!=1 or not _same_token(spans[0],word):
+            raise ValueError('GLM_requires_actual_whole_Tess_source_span')
+        if _geometry_foreign_owners(before['product_rows'],row_index,role,[word],rules):
+            raise ValueError('preserved_foreign_source_owner')
+        return [word]
     if evidence.get('route') in ('SOURCE_HEADER_ROW_BAND','FRESH_WHOLE_SOURCE_ROW_BAND'):
         return _source_cell_proof(before,row_index,role,field,evidence,cache,observation,
                                   helpers,observation_pin,source)
@@ -404,6 +431,8 @@ def conserve_corrections(before, candidate, cache, observation, helpers, observa
         audit['rejected_changes'].append({'reason':'machine_only_invoice_frame_required'})
         return result, audit
     classifier=helpers.get('document_admission')
+    glm_ready=helpers.get('glm_ocr') is not None and isinstance(helpers.get('glm_source_record'),dict)
+    native_document_admitted=True
     if classifier is not None:
         admission=classifier.assess_document(before,cache,helpers['rules'],helpers['core'],
             observation=observation,observation_pin=observation_pin)
@@ -412,11 +441,19 @@ def conserve_corrections(before, candidate, cache, observation, helpers, observa
         audit['document_admission']=deepcopy(admission)
         if (admission.get('eligible') is not True or admission.get('reference_access') is not False
                 or admission.get('canonical_document_type_modified') is not False):
-            audit['rejected_changes'].append({'reason':'document_source_admission_rejected'})
-            return result,audit
+            native_document_admitted=False
+            if not glm_ready:
+                audit['rejected_changes'].append({'reason':'document_source_admission_rejected'})
+                return result,audit
     elif (before.get('document') or {}).get('document_type') != 'invoice_or_delivery':
-        audit['rejected_changes'].append({'reason':'machine_only_invoice_frame_required'})
-        return result,audit
+        native_document_admitted=False
+        if not glm_ready:
+            audit['rejected_changes'].append({'reason':'machine_only_invoice_frame_required'})
+            return result,audit
+    if glm_ready:
+        audit['GLM_policy']=GLM_POLICY
+        audit['legacy_document_admitted']=native_document_admitted
+        audit['GLM_printed_fact_is_not_receiving_approval']=True
     regions, cells = normalize(observation, cache)
     raw = candidate.get('document_ai_correction_association') or {}
     if _identity(before) != _identity(candidate):
@@ -431,6 +468,8 @@ def conserve_corrections(before, candidate, cache, observation, helpers, observa
         try:
             if type(index) is not int or not 0 <= index < len(rows) or role not in ROLES:
                 raise ValueError('only_existing_row_quantity_unit_revisions_allowed')
+            if not native_document_admitted and (change.get('evidence') or {}).get('policy')!=GLM_POLICY:
+                raise ValueError('legacy_document_gate_still_required_for_non_GLM_routes')
             if key in keys:
                 raise ValueError('duplicate_revision_identity')
             keys.add(key)

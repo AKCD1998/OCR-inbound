@@ -19,6 +19,92 @@ class SourceCellAssociationTests(unittest.TestCase):
 
     def propose(self):return cells.propose(self.page,self.cache,self.obs,self.helpers,PIN)
 
+    def quantity_only_fixture(self):
+        self.cache['working_tokens']=[t for t in self.cache['working_tokens']
+            if t['token_id'] not in ('p:h2','p:u1','p:u2')]
+        self.cache['tesseract_working_tokens']=[t for t in self.cache['tesseract_working_tokens']
+            if t['token_id'] not in ('tesseract:u1','tesseract:u2')]
+
+    def test_explicit_quantity_only_context_does_not_wait_for_an_unobserved_unit_heading(self):
+        self.quantity_only_fixture();before=deepcopy((self.page,self.cache,self.obs))
+        self.assertFalse(self.propose()['source_contexts'])
+        self.helpers['quantity_only_source_contexts']=True
+        out=self.propose()
+        self.assertEqual([(0,'quantity'),(1,'quantity')],[(x['row_index'],x['field']) for x in out['changes']],out['rejected'])
+        for event in out['changes']:
+            evidence=event['evidence'];proof=evidence['quantity_only_header_proof']
+            self.assertEqual('EXPLICIT_QUANTITY_ONLY_PRIMARY_LITERAL_HEADERS',proof['method'])
+            self.assertEqual(['description','quantity'],proof['required_roles'])
+            self.assertNotIn('unit',evidence['whole_source_headers'])
+            self.assertFalse(proof['unit_inferred']);self.assertFalse(proof['physical_cell_borders_claimed'])
+            cells.verify(self.page,self.cache,self.obs,self.helpers,PIN,event['row_index'],'quantity',evidence)
+            forged=deepcopy(evidence);forged['quantity_only_header_proof']['all_coherent_primary_header_groups'].pop()
+            with self.assertRaises(ValueError):
+                cells.verify(self.page,self.cache,self.obs,self.helpers,PIN,event['row_index'],'quantity',forged)
+        self.assertEqual(before,(self.page,self.cache,self.obs))
+
+    def test_quantity_only_route_keeps_competing_words_and_foreign_owners(self):
+        self.quantity_only_fixture();self.helpers['quantity_only_source_contexts']=True
+        self.page['product_rows'][0]['fields']['unit_price']={'raw_value':'10','token_ids':['p:q1']}
+        out=self.propose();self.assertNotIn((0,'quantity'),[(e['row_index'],e['field']) for e in out['changes']])
+        self.assertIn('preserved_foreign_source_owner',[e['reason'] for e in out['rejected']])
+        for mode in ('unbounded','competing_whole_heading','ambiguous_quantity','price_word','low_primary','protected_neighbour'):
+            self.page,self.cache,self.obs=fixture();self.quantity_only_fixture()
+            if mode=='unbounded':self.cache['working_tokens']=[t for t in self.cache['working_tokens'] if t['token_id']!='p:h3']
+            elif mode=='competing_whole_heading':self.cache['working_tokens'].append({'text':'Price','token_id':'intruding-price',
+                'box':[420,120,810,140],'confidence':.99,'engine':'PADDLE_TH'})
+            elif mode=='ambiguous_quantity':self.cache['working_tokens'].append({'text':'QTY','token_id':'other-qty',
+                'box':[760,120,800,140],'confidence':.99,'engine':'PADDLE_TH'})
+            elif mode=='price_word':self.cache['working_tokens'].append({'text':'900','token_id':'foreign-price',
+                'box':[580,220,610,240],'confidence':.99,'engine':'PADDLE_TH'})
+            elif mode=='low_primary':next(t for t in self.cache['working_tokens'] if t['token_id']=='p:q1')['confidence']=.949
+            else:self.page['product_rows'][1]['relationships']=[{'type':'unknown_receiving_semantics'}]
+            with self.subTest(mode=mode):
+                out=self.propose();self.assertNotIn((0,'quantity'),[(e['row_index'],e['field']) for e in out['changes']])
+
+    def test_quantity_only_opt_in_does_not_change_legacy_triplet_contexts(self):
+        legacy,_=cells._contexts(self.page,self.cache,self.obs,self.helpers,PIN)
+        self.helpers['quantity_only_source_contexts']=True
+        enabled,_=cells._contexts(self.page,self.cache,self.obs,self.helpers,PIN)
+        self.assertEqual(legacy,enabled)
+
+    def test_quantity_only_retains_unknown_whole_detections_in_every_reader_family(self):
+        for family in ('primary','secondary','alternative'):
+            self.page,self.cache,self.obs=fixture();self.quantity_only_fixture()
+            self.helpers['quantity_only_source_contexts']=True
+            t={'token_id':'unexpected-source','text':'UNREGISTERED','box':[590,220,650,240],
+               'engine':'PADDLE_TH','confidence':.99}
+            if family=='primary':self.cache['working_tokens'].append(t)
+            elif family=='secondary':
+                t.update(token_id='tesseract:unexpected',engine='TESSERACT_THA_ENG',original_source_bbox=deepcopy(t['box']),
+                    recognition_transform={'source_engine':'TESSERACT_THA_ENG','coordinate_space':'upright_image'})
+                self.cache['tesseract_working_tokens'].append(t)
+            else:self.cache['targeted_views']=[{'tokens':[t]}]
+            before=deepcopy(self.cache);out=self.propose()
+            with self.subTest(family=family):
+                self.assertNotIn((0,'quantity'),[(e['row_index'],e['field']) for e in out['changes']])
+                self.assertEqual(before,self.cache)
+
+    def test_ambiguous_or_observed_uom_cannot_be_relabelled_missing(self):
+        for mode in ('ambiguous','observed'):
+            self.page,self.cache,self.obs=fixture();self.quantity_only_fixture()
+            self.helpers['quantity_only_source_contexts']=True
+            self.cache['working_tokens'].append({'token_id':'uom-left','text':'UOM',
+                'box':[680,120,750,140],'confidence':.99,'engine':'PADDLE_TH'})
+            if mode=='ambiguous':self.cache['working_tokens'].append({'token_id':'uom-right','text':'UOM',
+                'box':[760,120,810,140],'confidence':.99,'engine':'PADDLE_TH'})
+            contexts,_=cells._contexts(self.page,self.cache,self.obs,self.helpers,PIN)
+            with self.subTest(mode=mode):self.assertFalse([x for x in contexts if 'quantity_only_header_proof' in x['evidence']])
+
+    def test_quantity_only_retains_lower_confidence_same_center_wide_price_heading(self):
+        self.quantity_only_fixture();self.helpers['quantity_only_source_contexts']=True
+        for tid,box,confidence in (('chosen-price',[680,120,700,140],.99),
+                                   ('wide-price',[500,120,880,140],.98)):
+            self.cache['working_tokens'].append({'token_id':tid,'text':'Price','box':box,
+                'confidence':confidence,'engine':'PADDLE_TH'})
+        out=self.propose()
+        self.assertFalse(out['source_contexts']);self.assertFalse(out['changes'])
+
     def test_actual_roi_needs_no_native_content_cell_and_preserves_inputs(self):
         self.obs['cell_association']['cells']=[];before=deepcopy((self.page,self.cache,self.obs))
         out=self.propose();self.assertEqual(4,len(out['changes']),out['rejected'])
